@@ -21,6 +21,7 @@ let mock
 let rig
 let harness
 let route
+let webId
 
 const RPC_PATH = `/api/${RPC_ENDPOINT}`
 
@@ -33,10 +34,10 @@ function installRpcHarness(service) {
         fetch: {
           register(registered) {
             routes.push(registered)
-            return Promise.resolve(() => {
+            return async () => {
               const index = routes.indexOf(registered)
               if (index >= 0) routes.splice(index, 1)
-            })
+            }
           },
         },
       }
@@ -99,7 +100,7 @@ async function rpcError(method, payload) {
 before(async () => {
   mock = await startMockServer()
   rig = createRig()
-  await saveMockHost(rig, mock, { name: 'web-1', tags: ['web'] })
+  webId = (await saveMockHost(rig, mock, { name: 'web-1', tags: ['web'] })).host.id
   harness = installRpcHarness(rig.service)
   await tick()
   route = harness.routes[0]
@@ -107,7 +108,7 @@ before(async () => {
 })
 
 after(async () => {
-  harness?.dispose?.()
+  await harness?.dispose?.()
   await mock?.close()
   await rig?.dispose()
   cleanupTempDirs()
@@ -126,9 +127,9 @@ test('rpc: state returns the State shape', async () => {
   assert.equal(state.settings.dataDir, rig.root)
   assert.equal(state.credentialsAvailable, true)
   assert.equal(state.hosts.length, 1)
-  assert.equal(state.hosts[0].id, 'web-1')
+  assert.equal(state.hosts[0].id, webId)
   assert.equal(state.hosts[0].secret.fields.password, true)
-  assert.deepEqual(state.groups, [{ tag: 'web', hostIds: ['web-1'] }])
+  assert.deepEqual(state.groups, [{ tag: 'web', hostIds: [webId] }])
   assert.ok(Array.isArray(state.knownHosts))
   assert.ok(Array.isArray(state.sessions))
 })
@@ -143,11 +144,11 @@ test('rpc: host.save / host.test / host.delete round-trip', async () => {
     tags: ['rpc'],
     secret: { password: MOCK_PASSWORD },
   })
-  assert.equal(saved.host.id, 'rpc-host')
+  assert.ok(saved.host.id)
   assert.equal(saved.host.secret.fields.password, true)
-  assert.ok(saved.state.hosts.some((host) => host.id === 'rpc-host'))
+  assert.ok(saved.state.hosts.some((host) => host.id === saved.host.id))
 
-  const tested = await rpcValue('host.test', { id: 'rpc-host' })
+  const tested = await rpcValue('host.test', { id: saved.host.id })
   assert.equal(tested.ok, true)
   assert.equal(tested.fingerprint, mock.fingerprint)
   assert.equal(tested.hostKeyStatus, 'new')
@@ -155,13 +156,13 @@ test('rpc: host.save / host.test / host.delete round-trip', async () => {
   const forgotten = await rpcValue('knownHost.forget', { host: '127.0.0.1', port: mock.port })
   assert.equal(forgotten.state.knownHosts.length, 0)
 
-  const deleted = await rpcValue('host.delete', { id: 'rpc-host' })
+  const deleted = await rpcValue('host.delete', { id: saved.host.id })
   assert.equal(deleted.removed, true)
-  assert.ok(!deleted.state.hosts.some((host) => host.id === 'rpc-host'))
+  assert.ok(!deleted.state.hosts.some((host) => host.id === saved.host.id))
 })
 
 test('rpc: knownHost.approve works after a detected fingerprint change', async () => {
-  const tested = await rpcValue('host.test', { id: 'web-1' })
+  const tested = await rpcValue('host.test', { id: webId })
   assert.equal(tested.ok, true)
 
   await rig.knownHosts.approve({
@@ -170,15 +171,15 @@ test('rpc: knownHost.approve works after a detected fingerprint change', async (
     keyType: 'ssh-ed25519',
     fingerprint: `SHA256:${'C'.repeat(43)}`,
   })
-  const changed = await rpcValue('host.test', { id: 'web-1' })
+  const changed = await rpcValue('host.test', { id: webId })
   assert.equal(changed.ok, false)
   assert.equal(changed.hostKeyStatus, 'changed')
 
-  const approved = await rpcValue('knownHost.approve', { host: '127.0.0.1', port: mock.port })
+  const approved = await rpcValue('knownHost.approve', { host: '127.0.0.1', port: mock.port, fingerprint: changed.fingerprint })
   assert.equal(approved.entry.fingerprint, mock.fingerprint)
   assert.equal(approved.state.knownHosts[0].fingerprint, mock.fingerprint)
 
-  const afterApprove = await rpcValue('host.test', { id: 'web-1' })
+  const afterApprove = await rpcValue('host.test', { id: webId })
   assert.equal(afterApprove.ok, true)
   assert.equal(afterApprove.hostKeyStatus, 'known')
 })
@@ -248,6 +249,64 @@ test('rpc: rejects malformed requests and wrong HTTP methods', async () => {
   const missingPayloadBody = await missingPayload.json()
   assert.equal(missingPayloadBody.result.ok, false)
   assert.equal(missingPayloadBody.result.error.code, 'bad-request')
+})
+
+test('rpc: synchronous registration awaits asynchronous cleanup exactly once', async () => {
+  let releases = 0
+  let finish
+  const pending = new Promise(resolve => { finish = resolve })
+  const dispose = installRpc({
+    get: () => ({ fetch: { register: () => async () => { releases++; await pending } } }),
+    effect: factory => factory(),
+  }, { service: {}, logger: quietLogger })
+  const cleanup = dispose()
+  assert.equal(dispose(), cleanup)
+  let complete = false
+  cleanup.then(() => { complete = true })
+  await tick()
+  assert.equal(releases, 1)
+  assert.equal(complete, false)
+  finish()
+  await cleanup
+  assert.equal(complete, true)
+})
+
+test('rpc: legacy registration resolving after unload is cleaned up', async () => {
+  let resolveRegistration, releases = 0
+  const pending = new Promise(resolve => { resolveRegistration = resolve })
+  const dispose = installRpc({
+    get: () => ({ fetch: { register: () => pending } }), effect: factory => factory(),
+  }, { service: {}, logger: quietLogger })
+  const cleanup = dispose()
+  resolveRegistration(async () => { releases++ })
+  await cleanup
+  await dispose()
+  assert.equal(releases, 1)
+})
+
+test('rpc: rejected registration and asynchronous cleanup failures are observed', async () => {
+  const errors = [], warnings = []
+  const logger = { error: (...args) => errors.push(args), warn: (...args) => warnings.push(args) }
+  for (const register of [
+    () => Promise.reject(new Error('registration failed')),
+    () => async () => { throw new Error('cleanup failed') },
+  ]) {
+    const dispose = installRpc({ get: () => ({ fetch: { register } }), effect: factory => factory() }, { service: {}, logger })
+    await dispose()
+  }
+  assert.equal(errors.length, 1)
+  assert.equal(warnings.length, 1)
+})
+
+test('rpc: cleanup has its own route and preserves warnings and public pending state', async () => {
+  const requests = []
+  const value = { warnings: [{ code: 'cleanup-pending', message: 'Retry cleanup' }], state: { hosts: [], pendingCleanup: [{ id: 'retired-id', name: 'old-host' }] } }
+  const isolated = installRpcHarness({ cleanupHost: async payload => { requests.push(payload); return value } })
+  try {
+    const response = await isolated.routes[0].fetch(rpcRequest('host.cleanup', { id: 'retired-id' }))
+    assert.deepEqual((await response.json()).result, { ok: true, value })
+    assert.deepEqual(requests, [{ id: 'retired-id' }])
+  } finally { await isolated.dispose() }
 })
 
 test('rpc: installs without a connection service without throwing', () => {

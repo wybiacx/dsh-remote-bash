@@ -4,7 +4,7 @@
  */
 import crypto from 'node:crypto'
 import ssh2 from 'ssh2'
-import { readJsonFile, writeJsonFile, nowMs } from './util.js'
+import { readJsonFile, writeJsonFile, nowMs, errorWithCode } from './util.js'
 
 /** 计算 OpenSSH 风格的 SHA256 指纹。 */
 export function fingerprintOf(hostKey) {
@@ -79,6 +79,30 @@ export function createKnownHosts({ filePath }) {
         const state = await load()
         const found = state.hosts.find((entry) => hostKey(entry.host, entry.port) === hostKey(host, port))
         return found ? structuredClone(found) : undefined
+      })
+    },
+    /** 校验与首次提交共享同一临界区，不能在外部先 find 再 record。 */
+    async verify({ host, port, keyType, fingerprint }) {
+      return serialize(async () => {
+        const state = await load()
+        const key = hostKey(host, port)
+        const existing = state.hosts.find((entry) => hostKey(entry.host, entry.port) === key)
+        if (existing && existing.fingerprint !== fingerprint) {
+          throw errorWithCode('host-key-changed',
+            `主机 ${host}:${port} 的 SSH 指纹与已记录不一致，已拒绝连接。请在设置页核对新指纹。`,
+            { host, port, fingerprint, keyType, previousFingerprint: existing.fingerprint })
+        }
+        const stamp = nowMs()
+        const entry = existing
+          ? { ...existing, lastSeenAt: stamp }
+          : { host: String(host).trim(), port: Number(port) || 22, keyType: keyType || 'unknown', fingerprint, firstSeenAt: stamp, lastSeenAt: stamp }
+        const next = existing ? state.hosts.map((item) => item === existing ? entry : item) : [...state.hosts, entry]
+        if (existing) {
+          try { await persist(next) } catch { /* 刷新时间失败不改变已确认的信任。 */ }
+        } else {
+          await persist(next)
+        }
+        return { fingerprint, keyType: entry.keyType, status: existing ? 'known' : 'new' }
       })
     },
     /** 首次记录/刷新已有指纹（不覆盖已存在但不同的指纹）。 */

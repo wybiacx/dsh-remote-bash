@@ -84,6 +84,12 @@ export function createFakeCredentials({ available = true } = {}) {
   }
   const records = new Map()
   const calls = []
+  const chains = new Map()
+  const exclusive = (key, work) => {
+    const next = (chains.get(key) || Promise.resolve()).then(work)
+    chains.set(key, next.catch(() => {}))
+    return next
+  }
   return {
     records,
     calls,
@@ -101,15 +107,17 @@ export function createFakeCredentials({ available = true } = {}) {
     },
     async modifyRecord(key, mutate) {
       calls.push({ op: 'modifyRecord', key })
-      const current = records.get(key)
-      const next = await mutate(current)
-      if (next === undefined) return current
-      records.set(key, next)
-      return next
+      return exclusive(key, async () => {
+        const current = structuredClone(records.get(key))
+        const next = await mutate(current)
+        if (next === undefined) return current
+        records.set(key, structuredClone(next))
+        return next
+      })
     },
     async deleteRecord(key) {
       calls.push({ op: 'deleteRecord', key })
-      records.delete(key)
+      return exclusive(key, () => records.delete(key))
     },
   }
 }
@@ -206,7 +214,7 @@ export function createRig({ dataDir, config = {}, credentials } = {}) {
       return service.saveHost({ ...hostInput({ port: 1 }, overrides), secret })
     },
     async dispose() {
-      service.dispose()
+      await service.dispose()
       removeTempDir(root)
     },
   }

@@ -61,9 +61,9 @@ export function apply(ctx, rawConfig = {}) {
   installTools(ctx, { service, gate, config })
   ctx.inject(['connection'], (connectionCtx) => installRpc(connectionCtx, { service, logger }))
   ctx.inject(['systemPrompt'], (promptCtx) => installPrompt(promptCtx, { config, paths }))
-  ctx.effect(() => () => {
+  ctx.effect(() => async () => {
     try {
-      service.dispose()
+      await service.dispose()
     } catch (error) {
       logger.warn?.(`[remote-bash] 清理失败：${error?.message ?? error}`)
     }

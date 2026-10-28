@@ -133,6 +133,18 @@ window.__ModuleLoader__.load({
       'not-found': 'error.notFound',
       unavailable: 'error.unavailable',
       'rpc-unavailable': 'error.rpcUnavailable',
+      'credentials-unavailable': 'error.credentialsUnavailable',
+      'no-pending-fingerprint': 'error.noPendingFingerprint',
+      'fingerprint-mismatch': 'error.fingerprintMismatch',
+      'target-changed': 'error.targetChanged',
+      'inventory-conflict': 'error.inventoryConflict',
+      'credentials-error': 'error.credentialsError',
+      'unsupported-inventory-version': 'error.inventoryVersion',
+      'unsafe-path': 'error.unsafePath',
+      'sudo-password-missing': 'error.sudoPasswordMissing',
+      'sudo-auth-failed': 'error.sudoAuthFailed',
+      'session-limit': 'error.sessionLimit',
+      timeout: 'error.timeout',
     }
 
     function describeError(t, error) {
@@ -202,6 +214,15 @@ window.__ModuleLoader__.load({
       'error.invalidSession': '会话 key 无效或会话已关闭。',
       'error.requiredFields': '请填写：{fields}',
       'error.invalidPort': '端口必须是 1–65535 的整数。',
+      'error.targetChanged': '主机配置或测试结果已改变，请刷新并重新测试或执行。',
+      'error.inventoryConflict': '主机已被更新，请刷新后重试。',
+      'error.credentialsError': '凭据读写失败，请检查凭据服务后重试；原有已提交配置仍保留。',
+      'error.inventoryVersion': '当前插件不支持该清单版本，请使用兼容版本，勿覆盖原文件。',
+      'error.unsafePath': '路径包含链接或不安全的目录项，请选择普通文件与目录。',
+      'error.sudoPasswordMissing': 'sudo 要求密码，请在设置页配置 sudo 密码。',
+      'error.sudoAuthFailed': 'sudo 认证失败，请检查已保存密码。',
+      'error.sessionLimit': '持久会话已满且均在使用中，请等待任务完成或关闭会话。',
+      'error.timeout': '操作超时；请先检查远端状态，再决定是否重试。',
       'credentials.unavailable': 'DSH 凭据库当前不可用：密码、私钥、口令与 sudo 密码将无法保存，已有凭据也无法读取。',
       'hosts.emptyTitle': '还没有远程主机',
       'hosts.emptyDesc': '添加一台主机后，Agent 就能通过 remote_bash 工具在它上面执行命令。',
@@ -222,6 +243,10 @@ window.__ModuleLoader__.load({
       'hosts.testing': '测试中…',
       'hosts.saved': '主机已保存',
       'hosts.deleted': '主机已删除',
+      'cleanup.title': '凭据清理待完成',
+      'cleanup.description': '以下主机的退役凭据尚未清理。重试只清理退役凭据，不会删除主机或当前凭据。',
+      'cleanup.retry': '重试清理',
+      'cleanup.done': '凭据清理已完成',
       'hosts.deleteConfirm': '删除主机',
       'hosts.deleteConfirmDesc': '确定删除主机“{name}”？这会移除主机清单记录、凭据库中的密钥并关闭该主机的持久会话；已知主机指纹不会自动删除。',
       'test.successKnown': '连接成功，主机指纹与记录一致',
@@ -366,6 +391,15 @@ window.__ModuleLoader__.load({
       'error.invalidSession': 'The session key is invalid or the session is already closed.',
       'error.requiredFields': 'Fill in: {fields}',
       'error.invalidPort': 'The port must be an integer between 1 and 65535.',
+      'error.targetChanged': 'The host configuration or test result changed. Refresh and test or run again.',
+      'error.inventoryConflict': 'The host was updated. Refresh before retrying.',
+      'error.credentialsError': 'Credential access failed. Check the credential service and retry; the previously committed configuration is retained.',
+      'error.inventoryVersion': 'This inventory version needs a compatible plugin. Do not overwrite the original file.',
+      'error.unsafePath': 'The path contains a link or an unsafe directory entry. Choose regular files and directories.',
+      'error.sudoPasswordMissing': 'Sudo requested a password. Configure its password in Settings.',
+      'error.sudoAuthFailed': 'Sudo authentication failed. Check the stored password.',
+      'error.sessionLimit': 'All persistent sessions are busy. Wait for a task to finish or close a session.',
+      'error.timeout': 'The operation timed out. Check the remote state before retrying.',
       'credentials.unavailable': 'The DSH credential store is unavailable: passwords, private keys, passphrases and sudo passwords cannot be saved, and existing credentials cannot be read.',
       'hosts.emptyTitle': 'No remote hosts yet',
       'hosts.emptyDesc': 'Add a host and the Agent can run commands on it through the remote_bash tool.',
@@ -386,6 +420,10 @@ window.__ModuleLoader__.load({
       'hosts.testing': 'Testing…',
       'hosts.saved': 'Host saved',
       'hosts.deleted': 'Host deleted',
+      'cleanup.title': 'Credential cleanup pending',
+      'cleanup.description': 'Retired credentials for these hosts still need cleanup. Retrying does not delete hosts or their current credentials.',
+      'cleanup.retry': 'Retry cleanup',
+      'cleanup.done': 'Credential cleanup completed',
       'hosts.deleteConfirm': 'Delete host',
       'hosts.deleteConfirmDesc': 'Delete host “{name}”? This removes the inventory record, deletes its stored credentials, and closes its persistent sessions; the known-host fingerprint is kept.',
       'test.successKnown': 'Connected; the host fingerprint matches the record',
@@ -1491,7 +1529,7 @@ window.__ModuleLoader__.load({
               result: test.result,
               error: test.error,
               onTrust: test.result && (test.result.hostKeyStatus === 'changed' || (test.result.error && test.result.error.code === 'host-key-changed'))
-                ? (fingerprint) => onTrust(host, fingerprint)
+                ? (fingerprint) => onTrust(host, fingerprint, test.result.target)
                 : null,
               trusting: Boolean(test.trusting),
             }))
@@ -1768,6 +1806,18 @@ window.__ModuleLoader__.load({
 
       const clearList = () => secretFields.filter((field) => cleared[field])
 
+      // Bind test results to this exact form revision, including credential edits.
+      // The signature stays in component memory and is never sent or logged.
+      const formSignature = JSON.stringify([baseInput(), secretPayload(), clearList(), credentialsAvailable])
+      const formRevision = React.useRef({ signature: formSignature, version: 0 })
+      if (formRevision.current.signature !== formSignature) {
+        formRevision.current = { signature: formSignature, version: formRevision.current.version + 1 }
+      }
+      const testedVersion = React.useRef(-1)
+      const currentTest = testedVersion.current === formRevision.current.version
+      const visibleTestResult = currentTest ? testResult : null
+      const visibleTestError = currentTest ? testError : null
+
       const reportInvalid = () => {
         const missing = validate()
         if (!missing.length) return true
@@ -1801,28 +1851,30 @@ window.__ModuleLoader__.load({
         setTestError(null)
         setTestResult(null)
         setTestBusy(true)
+        const version = formRevision.current.version
+        testedVersion.current = version
         try {
-          const payload = isEdit
-            ? { id: host.id }
-            : { draft: baseInput(), secret: credentialsAvailable ? secretPayload() : {} }
+          const payload = {
+            ...(isEdit ? { id: host.id } : {}),
+            draft: baseInput(),
+            secret: credentialsAvailable ? secretPayload() : {},
+            clear: credentialsAvailable ? clearList() : [],
+          }
           const result = await onTest(payload)
-          if (mounted.current) setTestResult(result)
+          if (mounted.current && version === formRevision.current.version) setTestResult(result)
         } catch (error) {
-          if (mounted.current) setTestError(error)
+          if (mounted.current && version === formRevision.current.version) setTestError(error)
         } finally {
           if (mounted.current) setTestBusy(false)
         }
       }
 
       const trust = async (fingerprint) => {
-        if (trusting) return
+        const target = visibleTestResult?.target
+        if (trusting || !target || testedVersion.current !== formRevision.current.version) return
         setTrusting(true)
         try {
-          await onApprove({
-            host: isEdit ? host.host : address.trim(),
-            port: isEdit ? host.port : Number(port),
-            fingerprint,
-          })
+          await onApprove({ host: target.host, port: target.port, fingerprint })
           if (mounted.current) {
             setTestError(null)
             setTestResult(null)
@@ -1835,7 +1887,7 @@ window.__ModuleLoader__.load({
       }
 
       const secretEditable = Boolean(credentialsAvailable)
-      const testChanged = testResult && (testResult.hostKeyStatus === 'changed' || (testResult.error && testResult.error.code === 'host-key-changed'))
+      const testChanged = visibleTestResult?.target && (visibleTestResult.hostKeyStatus === 'changed' || visibleTestResult.error?.code === 'host-key-changed')
 
       return h(Modal, {
         t,
@@ -1847,8 +1899,8 @@ window.__ModuleLoader__.load({
           h(TestResultPanel, {
             t,
             busy: testBusy,
-            result: testResult,
-            error: testError,
+            result: visibleTestResult,
+            error: visibleTestError,
             onTrust: testChanged ? trust : null,
             trusting,
           }),
@@ -1996,37 +2048,74 @@ window.__ModuleLoader__.load({
         if (mounted.current) setNotice(next)
       }, [])
 
-      const applyState = React.useCallback((value) => {
-        if (value && Array.isArray(value.hosts)) {
-          if (mounted.current) setData(value)
-          return true
+      const generation = React.useRef(0)
+      const testsGeneration = React.useRef(0)
+      const mutationQueue = React.useRef(Promise.resolve())
+      const applyState = React.useCallback((value, version) => {
+        if (!value || !Array.isArray(value.hosts)) return false
+        if (mounted.current && version === generation.current) {
+          setData(value)
+          setLoadError(null)
         }
-        return false
+        return true
       }, [])
 
       const load = React.useCallback(async (quiet) => {
-        if (quiet) {
-          if (mounted.current) setRefreshing(true)
-        } else if (mounted.current) {
-          setLoading(true)
-          setLoadError(null)
-        }
+        // Reads wait for queued writes; subsequent writes invalidate in-flight reads.
+        let pending
+        do {
+          pending = mutationQueue.current
+          await pending
+        } while (pending !== mutationQueue.current)
+        if (!mounted.current) return
+        const version = ++generation.current
+        if (quiet) setRefreshing(true)
+        else { setLoading(true); setLoadError(null) }
         try {
           const value = await call('state')
-          if (!mounted.current) return
-          setData(value)
-          setLoadError(null)
+          applyState(value, version)
         } catch (error) {
-          if (!mounted.current) return
+          if (!mounted.current || version !== generation.current) return
           if (quiet) showNotice({ tone: 'error', text: describeError(t, error) })
           else setLoadError(error)
         } finally {
-          if (mounted.current) {
+          if (mounted.current && version === generation.current) {
             setLoading(false)
             setRefreshing(false)
           }
         }
-      }, [t, showNotice])
+      }, [t, showNotice, applyState])
+
+      const mutate = React.useCallback((work, successText) => {
+        ++generation.current
+        ++testsGeneration.current
+        if (mounted.current) setTests({})
+        const operation = mutationQueue.current.then(async () => {
+          if (!mounted.current) return undefined
+          ++generation.current
+          try {
+            const value = await work()
+            const next = value?.state ?? await call('state')
+            // Writes are serialized and reads wait for this queue. Publish this
+            // committed state even if a later queued write will fail.
+            applyState(next, generation.current)
+            if (mounted.current) setTests({})
+            const warnings = Array.isArray(value?.warnings) ? value.warnings : []
+            if (warnings.length) {
+              showNotice({ tone: 'warn', text: [...new Set(warnings.map((warning) => warning.code === 'credential-cleanup-pending' ? t('cleanup.description') : warning.message || warning.code))].join('\n') })
+            } else {
+              const text = typeof successText === 'function' ? successText(value) : successText
+              if (text) showNotice({ tone: 'success', text })
+            }
+            return value
+          } finally {
+            ++generation.current
+            if (mounted.current) { setLoading(false); setRefreshing(false) }
+          }
+        })
+        mutationQueue.current = operation.catch(() => {})
+        return operation
+      }, [applyState, showNotice, t])
 
       React.useEffect(() => {
         load(false)
@@ -2037,19 +2126,13 @@ window.__ModuleLoader__.load({
       /** 执行一个变更操作，统一提示成功/失败；返回是否成功。 */
       const perform = React.useCallback(async (work, successText) => {
         try {
-          const value = await work()
-          const next = value && value.state
-          if (!applyState(next)) {
-            // 某些方法（例如关闭全部会话）返回 { closed, state }；state 缺失时兜底重读。
-            await load(true)
-          }
-          if (successText) showNotice({ tone: 'success', text: successText })
+          await mutate(work, successText)
           return true
         } catch (error) {
           showNotice({ tone: 'error', text: describeError(t, error) })
           return false
         }
-      }, [t, applyState, load, showNotice])
+      }, [t, mutate, showNotice])
 
       const setHostTest = React.useCallback((hostId, patch) => {
         setTests((prev) => ({ ...prev, [hostId]: { ...(prev[hostId] || {}), ...patch } }))
@@ -2062,31 +2145,29 @@ window.__ModuleLoader__.load({
       }, [load])
 
       const testHost = React.useCallback(async (host) => {
+        const version = testsGeneration.current
         setHostTest(host.id, { busy: true, result: null, error: null })
         try {
           const result = await runHostTest({ id: host.id })
-          if (mounted.current) setHostTest(host.id, { busy: false, result })
+          if (mounted.current && version === testsGeneration.current) setHostTest(host.id, { busy: false, result })
         } catch (error) {
-          if (mounted.current) setHostTest(host.id, { busy: false, error })
+          if (mounted.current && version === testsGeneration.current) setHostTest(host.id, { busy: false, error })
         }
       }, [runHostTest, setHostTest])
 
       const approveFingerprint = React.useCallback(async (target) => {
-        const value = await call('knownHost.approve', {
+        return mutate(() => call('knownHost.approve', {
           host: target.host,
           port: Number(target.port),
           fingerprint: target.fingerprint,
-        })
-        if (value && value.state) applyState(value.state)
-        else load(true)
-        showNotice({ tone: 'success', text: t('test.trusted') })
-        return value
-      }, [applyState, load, showNotice, t])
+        }), t('test.trusted'))
+      }, [mutate, t])
 
-      const trustHost = React.useCallback(async (host, fingerprint) => {
+      const trustHost = React.useCallback(async (host, fingerprint, target) => {
+        if (!target) return
         setHostTest(host.id, { trusting: true })
         try {
-          await approveFingerprint({ host: host.host, port: host.port, fingerprint })
+          await approveFingerprint({ host: target.host, port: target.port, fingerprint })
           setHostTest(host.id, { trusting: false, result: null, error: null })
         } catch (error) {
           setHostTest(host.id, { trusting: false })
@@ -2129,17 +2210,11 @@ window.__ModuleLoader__.load({
           confirmLabel: t('knownHosts.forget'),
           danger: true,
           run: async () => {
-            try {
-              const value = await call('knownHost.forget', { host: entry.host, port: entry.port })
-              if (!applyState(value && value.state)) await load(true)
-              if (value && value.removed === false) showNotice({ tone: 'warn', text: t('error.notFound') })
-              else showNotice({ tone: 'success', text: t('knownHosts.forgotten') })
-            } catch (error) {
-              showNotice({ tone: 'error', text: describeError(t, error) })
-            }
+            await perform(() => call('knownHost.forget', { host: entry.host, port: entry.port }),
+              (value) => value?.removed === false ? t('error.notFound') : t('knownHosts.forgotten'))
           },
         })
-      }, [applyState, load, showNotice, t])
+      }, [perform, t])
 
       const openCloseSession = React.useCallback((session) => {
         setModal({
@@ -2149,18 +2224,11 @@ window.__ModuleLoader__.load({
           confirmLabel: t('sessions.close'),
           danger: false,
           run: async () => {
-            try {
-              const value = await call('session.close', { key: session.key })
-              // Host 当前返回 boolean；INTERFACE §3 约定 { state }。两种形态都兼容。
-              if (!applyState(value && value.state)) await load(true)
-              if (value === false) showNotice({ tone: 'warn', text: t('error.notFound') })
-              else showNotice({ tone: 'success', text: t('sessions.closed') })
-            } catch (error) {
-              showNotice({ tone: 'error', text: describeError(t, error) })
-            }
+            await perform(() => call('session.close', { key: session.key }),
+              (value) => value === false || value?.closed === false ? t('error.notFound') : t('sessions.closed'))
           },
         })
-      }, [applyState, load, showNotice, t])
+      }, [perform, t])
 
       const openCloseAllSessions = React.useCallback(() => {
         const count = data && Array.isArray(data.sessions) ? data.sessions.length : 0
@@ -2171,30 +2239,18 @@ window.__ModuleLoader__.load({
           confirmLabel: t('sessions.closeAll'),
           danger: true,
           run: async () => {
-            try {
-              const value = await call('session.closeAll')
-              if (!applyState(value && value.state)) await load(true)
-              const closed = value && typeof value.closed === 'number'
-                ? value.closed
-                : value && Array.isArray(value.closed)
-                  ? value.closed.length
-                  : count
-              showNotice({ tone: 'success', text: format(t('sessions.closedAll'), { n: closed }) })
-            } catch (error) {
-              showNotice({ tone: 'error', text: describeError(t, error) })
-            }
+            await perform(() => call('session.closeAll'), (value) =>
+              format(t('sessions.closedAll'), { n: typeof value?.closed === 'number' ? value.closed : count }))
           },
         })
-      }, [applyState, data, load, showNotice, t])
+      }, [perform, data, t])
 
       const saveHost = React.useCallback(async (payload) => {
-        const value = await call('host.save', payload)
-        if (!applyState(value && value.state)) await load(true)
-        showNotice({ tone: 'success', text: t('hosts.saved') })
+        const value = await mutate(() => call('host.save', payload), t('hosts.saved'))
         setTab('hosts')
         if (mounted.current) setModal(null)
         return value
-      }, [applyState, load, showNotice, t])
+      }, [mutate, t])
 
       const saveHostForForm = React.useCallback(async (payload) => {
         // 表单内部会捕获异常并展示；这里只透传。
@@ -2247,6 +2303,14 @@ window.__ModuleLoader__.load({
           : null,
         safeData.credentialsAvailable === false && !credentialsDismissed
           ? h(Banner, { t, tone: 'warn', onDismiss: () => setCredentialsDismissed(true) }, t('credentials.unavailable'))
+          : null,
+        Array.isArray(safeData.pendingCleanup) && safeData.pendingCleanup.length > 0
+          ? h(Banner, { t, tone: 'warn' },
+            h('div', null, h('strong', null, t('cleanup.title')),
+              h('p', null, t('cleanup.description')),
+              safeData.pendingCleanup.map((entry) => h('div', { key: entry.id, style: S.rowActions },
+                h('span', null, entry.name || entry.id),
+                h(Btn, { t, small: true, onClick: () => perform(() => call('host.cleanup', { id: entry.id }), t('cleanup.done')) }, t('cleanup.retry'))))))
           : null,
         h(Tabs, { t, items: tabs, value: tab, onChange: setTab }),
         tab === 'hosts'

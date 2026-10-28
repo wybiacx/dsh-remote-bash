@@ -84,20 +84,20 @@ test('paths: resolveDataDir falls back to DSH_HOME/remote-bash', () => {
 
 // --- inventory -------------------------------------------------------------
 
-test('inventory: missing file loads as an empty v1 document', async () => {
+test('inventory: missing file loads as an empty v2 document', async () => {
   const dir = makeTempDir('rb-inv-')
   const inventory = createInventory({ filePath: path.join(dir, 'inventory.json') })
-  assert.deepEqual(await inventory.load(), { version: 1, hosts: [] })
+  assert.deepEqual(await inventory.load(), { version: 2, hosts: [], pendingCleanup: [] })
   assert.deepEqual(await inventory.list(), [])
   assert.equal(await inventory.get('nope'), undefined)
 })
 
-test('inventory: upsert derives a slug id, normalizes defaults and persists', async () => {
+test('inventory: upsert creates a permanent random id, normalizes defaults and persists', async () => {
   const dir = makeTempDir('rb-inv-')
   const filePath = path.join(dir, 'inventory.json')
   const inventory = createInventory({ filePath })
   const created = await inventory.upsert(inventoryHost({ name: 'Web One', port: undefined, tags: 'web, prod' }))
-  assert.equal(created.id, 'web-one')
+  assert.match(created.id, /^web-one-[0-9a-f-]{36}$/)
   assert.equal(created.name, 'Web One')
   assert.equal(created.port, 22)
   assert.equal(created.auth, 'password')
@@ -110,15 +110,15 @@ test('inventory: upsert derives a slug id, normalizes defaults and persists', as
   const reloaded = createInventory({ filePath })
   const list = await reloaded.list()
   assert.equal(list.length, 1)
-  assert.equal(list[0].id, 'web-one')
+  assert.equal(list[0].id, created.id)
   assert.equal((fs.statSync(filePath).mode & 0o777), 0o600)
 
-  const updated = await reloaded.upsert({ id: 'web-one', name: 'Web One', username: 'root', auth: 'key' })
+  const updated = await reloaded.upsert({ id: created.id, name: 'Web One', username: 'root', auth: 'key' })
   assert.equal(updated.username, 'root')
   assert.equal(updated.auth, 'key')
   assert.equal(updated.createdAt, created.createdAt)
   assert.ok(updated.updatedAt >= created.updatedAt)
-  assert.equal(await reloaded.get('web-one').then((host) => host.username), 'root')
+  assert.equal(await reloaded.get(created.id).then((host) => host.username), 'root')
 })
 
 test('inventory: validation errors carry the documented codes', async () => {
@@ -141,10 +141,10 @@ test('inventory: validation errors carry the documented codes', async () => {
     { code: 'not-found' },
   )
 
-  await inventory.upsert(inventoryHost({ name: 'primary' }))
+  const primary = await inventory.upsert(inventoryHost({ name: 'primary' }))
   await assert.rejects(inventory.upsert(inventoryHost({ name: 'PRIMARY' })), { code: 'duplicate-name' })
   // Same name is fine when it is the same record.
-  await inventory.upsert({ id: 'primary', ...inventoryHost({ name: 'PRIMARY' }) })
+  await inventory.upsert({ id: primary.id, ...inventoryHost({ name: 'PRIMARY' }) })
 })
 
 test('inventory: remove reports whether a host existed', async () => {
@@ -290,10 +290,11 @@ test('credentials: write/read/flags/clear round-trip through the fake store', as
   await store.write('web-1', {}, { clear: ['passphrase', 'not-a-field'] })
   assert.deepEqual(await store.read('web-1'), { password: 'pw-1', sudoPassword: 'sudo-1' })
 
-  // Clearing everything deletes the record.
+  // Field clearing stays inside modifyRecord; an empty grant avoids a delete race.
   await store.write('web-1', {}, { clear: ['password', 'sudoPassword'] })
-  assert.equal(fake.records.has('remote-bash/web-1'), false)
+  assert.deepEqual(fake.records.get('remote-bash/web-1'), { kind: 'grant', payload: {} })
   assert.deepEqual(await store.read('web-1'), {})
+  assert.equal((await store.flags('web-1')).configured, false)
 
   // clear() always deletes.
   await store.write('web-2', { password: 'pw-2' })

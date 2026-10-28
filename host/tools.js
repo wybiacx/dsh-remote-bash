@@ -144,7 +144,7 @@ const RUN_PARAMETERS = {
       type: 'string',
       description: '可选：持久会话名（字母/数字/._-，≤32 字符）。相同名字跨调用复用同一个 shell，cd/export 状态保留。',
     },
-    sudo: { type: 'boolean', description: '是否用 sudo 提权执行（使用该主机保存的 sudo 密码，其次登录密码）。' },
+    sudo: { type: 'boolean', description: '省略时使用主机默认设置；false 禁用提权。需要认证时使用已保存的 sudo 密码，其次登录密码。' },
     maxOutputBytes: { type: 'integer', description: '单机输出上限（字节），默认 32768，最大 1048576。' },
   },
   required: ['targets', 'command'],
@@ -262,10 +262,11 @@ export function installTools(ctx, { service, gate, config }) {
       const description = typeof args?.description === 'string' ? args.description.trim().slice(0, 200) : ''
       if (!command.trim()) throw errorWithCode('invalid-command', 'command 不能为空。')
       if (!targets) throw errorWithCode('unknown-target', 'targets 不能为空（主机名、@分组 或 all）。')
-      const hosts = await service.resolveTargets(targets)
+      const plan = await service.prepareRun({ ...args, targets, command })
+      const hosts = plan.hosts
       const assessment = assessCommand(command, { extraPatterns: config.extraDangerousPatterns })
       const matches = [...assessment.matches]
-      const sudoRequested = args?.sudo === true || hosts.some((host) => host.sudo === true)
+      const sudoRequested = hosts.some((host) => host.useSudo)
       if (sudoRequested && !matches.some((match) => match.id === 'sudo' || match.id === 'sudo-mode')) {
         matches.push({ id: 'sudo-mode', label: 'sudo 提权' })
       }
@@ -282,21 +283,8 @@ export function installTools(ctx, { service, gate, config }) {
         matches,
       })
       if (!verdict.allowed) throw errorWithCode('approval-denied', verdict.reason ?? '命令未获批准。')
-      let session
-      if (args?.session !== undefined && args?.session !== null && String(args.session).trim()) {
-        session = String(args.session).trim()
-        if (!/^[A-Za-z0-9_.-]{1,32}$/.test(session)) {
-          throw errorWithCode('invalid-session', 'session 名只能包含字母、数字、点、下划线、连字符，且不超过 32 个字符。')
-        }
-      }
       const result = await service.run({
-        targets,
-        command,
-        cwd: args?.cwd,
-        timeoutSec: args?.timeoutSec,
-        session,
-        sudo: args?.sudo,
-        maxOutputBytes: args?.maxOutputBytes,
+        plan,
         agentId: exec?.agent?.id,
         signal: exec?.signal,
       })

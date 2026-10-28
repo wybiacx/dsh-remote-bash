@@ -33,6 +33,8 @@ let mock
 let rig
 let closedPort
 let hostCount
+let hostIds
+const idOf = (name) => hostIds[name]
 
 function findClosedPort() {
   return new Promise((resolve, reject) => {
@@ -72,7 +74,9 @@ before(async () => {
     tags: [],
     secret: { privateKey: KEY_NO_PASS },
   })
-  hostCount = (await rig.service.state()).hosts.length
+  const hosts = (await rig.service.state()).hosts
+  hostCount = hosts.length
+  hostIds = Object.fromEntries(hosts.map((host) => [host.name, host.id]))
 })
 
 after(async () => {
@@ -82,7 +86,7 @@ after(async () => {
 })
 
 function hostResult(result, hostId) {
-  const entry = result.hosts.find((host) => host.hostId === hostId)
+  const entry = result.hosts.find((host) => host.hostId === (hostIds[hostId] || hostId))
   assert.ok(entry, `result has no host ${hostId}: ${JSON.stringify(result.hosts, null, 2)}`)
   return entry
 }
@@ -101,7 +105,7 @@ test('service.state: settings, hosts + secret flags, groups, no secrets on disk'
   assert.equal(state.hosts.length, hostCount)
   assert.equal(hostCount, 5)
 
-  const web = state.hosts.find((host) => host.id === WEB)
+  const web = state.hosts.find((host) => host.id === idOf(WEB))
   assert.equal(web.username, 'tester')
   assert.equal(web.port, mock.port)
   assert.deepEqual(web.tags, ['web', 'prod'])
@@ -111,15 +115,15 @@ test('service.state: settings, hosts + secret flags, groups, no secrets on disk'
   assert.equal(web.secret.fields.sudoPassword, true)
   assert.equal(web.secret.fields.privateKey, false)
 
-  const keyHost = state.hosts.find((host) => host.id === KEY_HOST)
+  const keyHost = state.hosts.find((host) => host.id === idOf(KEY_HOST))
   assert.equal(keyHost.auth, 'key')
   assert.equal(keyHost.secret.fields.privateKey, true)
   assert.equal(keyHost.secret.fields.password, false)
 
   assert.deepEqual(state.groups, [
-    { tag: 'db', hostIds: [DB] },
-    { tag: 'prod', hostIds: [WEB, DB] },
-    { tag: 'web', hostIds: [WEB] },
+    { tag: 'db', hostIds: [idOf(DB)] },
+    { tag: 'prod', hostIds: [idOf(WEB), idOf(DB)] },
+    { tag: 'web', hostIds: [idOf(WEB)] },
   ])
   assert.deepEqual(state.knownHosts, [])
   assert.deepEqual(state.sessions, [])
@@ -150,13 +154,14 @@ test('service.saveHost: validation + credential write/clear lifecycle', async ()
     tags: ['temp'],
     secret: { password: 'temp-pw' },
   })
-  assert.equal(saved.host.id, 'temp-host')
+  assert.match(saved.host.id, /^temp-host-/)
   assert.equal(saved.host.secret.fields.password, true)
-  assert.ok(saved.state.hosts.some((host) => host.id === 'temp-host'))
-  assert.equal(rig.credentials.records.get('remote-bash/temp-host').payload.password, 'temp-pw')
+  assert.ok(saved.state.hosts.some((host) => host.id === saved.host.id))
+  const tempRef = (await rig.inventory.get(saved.host.id)).credentialRef
+  assert.equal(rig.credentials.records.get(tempRef).payload.password, 'temp-pw')
 
   const cleared = await rig.service.saveHost({
-    id: 'temp-host',
+    id: saved.host.id,
     name: 'temp-host',
     host: '127.0.0.1',
     port: mock.port,
@@ -166,9 +171,9 @@ test('service.saveHost: validation + credential write/clear lifecycle', async ()
     clear: ['password'],
   })
   assert.equal(cleared.host.secret.fields.password, false)
-  assert.equal(rig.credentials.records.has('remote-bash/temp-host'), false)
+  assert.equal(rig.credentials.records.has(tempRef), false)
 
-  const deleted = await rig.service.deleteHost({ id: 'temp-host' })
+  const deleted = await rig.service.deleteHost({ id: saved.host.id })
   assert.equal(deleted.removed, true)
 })
 
@@ -201,7 +206,7 @@ test('service.testHost: draft TOFU (new -> known), saved hosts, auth failure', a
   assert.equal(second.ok, true)
   assert.equal(second.hostKeyStatus, 'known')
 
-  const saved = await rig.service.testHost({ id: WEB })
+  const saved = await rig.service.testHost({ id: idOf(WEB) })
   assert.equal(saved.ok, true)
   assert.equal(saved.hostKeyStatus, 'known')
   assert.equal(saved.fingerprint, mock.fingerprint)
@@ -223,17 +228,17 @@ test('service.resolveTargets: all / @tag / comma separated / name & id / errors'
   assert.equal(all.length, hostCount)
 
   const webGroup = await rig.service.resolveTargets('@web')
-  assert.deepEqual(webGroup.map((host) => host.id), [WEB])
+  assert.deepEqual(webGroup.map((host) => host.id), [idOf(WEB)])
   const prodGroup = await rig.service.resolveTargets('@prod')
-  assert.deepEqual(prodGroup.map((host) => host.id).sort(), [DB, WEB].sort())
+  assert.deepEqual(prodGroup.map((host) => host.id).sort(), [idOf(DB), idOf(WEB)].sort())
   const byName = await rig.service.resolveTargets('web-1')
-  assert.equal(byName[0].id, WEB)
+  assert.equal(byName[0].id, idOf(WEB))
   const byUpperName = await rig.service.resolveTargets('WEB-1')
-  assert.equal(byUpperName[0].id, WEB)
-  const byId = await rig.service.resolveTargets(DB)
-  assert.equal(byId[0].id, DB)
+  assert.equal(byUpperName[0].id, idOf(WEB))
+  const byId = await rig.service.resolveTargets(idOf(DB))
+  assert.equal(byId[0].id, idOf(DB))
   const comma = await rig.service.resolveTargets('web-1,db-1')
-  assert.deepEqual(comma.map((host) => host.id).sort(), [WEB, DB].sort())
+  assert.deepEqual(comma.map((host) => host.id).sort(), [idOf(WEB), idOf(DB)].sort())
   const spaces = await rig.service.resolveTargets('web-1 db-1')
   assert.equal(spaces.length, 2)
   const dedup = await rig.service.resolveTargets('web-1,web-1')
@@ -266,7 +271,7 @@ test('service.run: single host stdout/exit code/cwd and RunResult shape', async 
   assert.ok(result.durationMs >= 0)
   assert.equal(result.hosts.length, 1)
   const entry = result.hosts[0]
-  assert.equal(entry.hostId, WEB)
+  assert.equal(entry.hostId, idOf(WEB))
   assert.equal(entry.name, WEB)
   assert.equal(entry.host, '127.0.0.1')
   assert.equal(entry.port, mock.port)
@@ -356,14 +361,14 @@ test('service.run: persistent session keeps cd/export and is listed/closed', asy
   const entry = first.hosts[0]
   assert.equal(entry.status, 'ok')
   assert.equal(entry.output, `${mock.homeDir}/persist-svc\n`)
-  assert.equal(entry.sessionKey, `agent-a::s1::${WEB}`)
+  assert.equal(entry.sessionKey, `agent-a::s1::${idOf(WEB)}`)
   assert.equal(first.session, 's1')
 
   const sessions = rig.service.listSessions({ agentId: 'agent-a' })
   assert.equal(sessions.length, 1)
-  assert.equal(sessions[0].key, `agent-a::s1::${WEB}`)
+  assert.equal(sessions[0].key, `agent-a::s1::${idOf(WEB)}`)
   assert.equal(sessions[0].label, 's1')
-  assert.equal(sessions[0].hostId, WEB)
+  assert.equal(sessions[0].hostId, idOf(WEB))
   assert.equal(sessions[0].hostName, WEB)
   assert.equal(sessions[0].agentId, 'agent-a')
   assert.ok(sessions[0].createdAt > 0)
@@ -605,8 +610,8 @@ test('service.upload/download: directories are transferred recursively', async (
     remotePath: '~/remote-tree-2',
   })
   assert.equal(mixed.hosts.length, 2)
-  const webEntry = mixed.hosts.find((entry) => entry.hostId === WEB)
-  const brokenEntry = mixed.hosts.find((entry) => entry.hostId === BROKEN)
+  const webEntry = mixed.hosts.find((entry) => entry.hostId === idOf(WEB))
+  const brokenEntry = mixed.hosts.find((entry) => entry.hostId === idOf(BROKEN))
   assert.equal(webEntry.status, 'ok')
   assert.equal(brokenEntry.status, 'error')
   assert.equal(brokenEntry.error.code, 'connect-failed')
@@ -626,7 +631,7 @@ test('service known hosts: forget, changed fingerprint detection and approve', a
   assert.equal(forgottenAgain.removed, false)
 
   // Next contact records the fingerprint again (TOFU).
-  const reTofu = await rig.service.testHost({ id: WEB })
+  const reTofu = await rig.service.testHost({ id: idOf(WEB) })
   assert.equal(reTofu.ok, true)
   assert.equal(reTofu.hostKeyStatus, 'new')
 
@@ -637,7 +642,7 @@ test('service known hosts: forget, changed fingerprint detection and approve', a
     keyType: 'ssh-ed25519',
     fingerprint: BOGUS_FINGERPRINT,
   })
-  const changed = await rig.service.testHost({ id: WEB })
+  const changed = await rig.service.testHost({ id: idOf(WEB) })
   assert.equal(changed.ok, false)
   assert.equal(changed.hostKeyStatus, 'changed')
   assert.equal(changed.fingerprint, mock.fingerprint)
@@ -648,11 +653,11 @@ test('service known hosts: forget, changed fingerprint detection and approve', a
     rig.service.approveFingerprint({ host: '127.0.0.1', port: mock.port, fingerprint: 'SHA256:wrong' }),
     { code: 'fingerprint-mismatch' },
   )
-  const approved = await rig.service.approveFingerprint({ host: '127.0.0.1', port: mock.port })
+  const approved = await rig.service.approveFingerprint({ host: '127.0.0.1', port: mock.port, fingerprint: mock.fingerprint })
   assert.equal(approved.entry.fingerprint, mock.fingerprint)
   assert.ok(approved.state.knownHosts.some((entry) => entry.fingerprint === mock.fingerprint))
 
-  const afterApprove = await rig.service.testHost({ id: WEB })
+  const afterApprove = await rig.service.testHost({ id: idOf(WEB) })
   assert.equal(afterApprove.ok, true)
   assert.equal(afterApprove.hostKeyStatus, 'known')
   await assert.rejects(
@@ -669,7 +674,7 @@ test('service known hosts: forget, changed fingerprint detection and approve', a
 // --- delete + credentials cleanup -----------------------------------------
 
 test('service.deleteHost: removes host, credentials and its persistent sessions', async () => {
-  await rig.service.saveHost({
+  const toDelete = await rig.service.saveHost({
     name: 'delete-me',
     host: '127.0.0.1',
     port: mock.port,
@@ -678,17 +683,18 @@ test('service.deleteHost: removes host, credentials and its persistent sessions'
     tags: [],
     secret: { password: MOCK_PASSWORD },
   })
-  assert.ok(rig.credentials.records.has('remote-bash/delete-me'))
+  const deleteRef = (await rig.inventory.get(toDelete.host.id)).credentialRef
+  assert.ok(rig.credentials.records.has(deleteRef))
 
-  const result = await rig.service.deleteHost({ id: 'delete-me' })
+  const result = await rig.service.deleteHost({ id: toDelete.host.id })
   assert.equal(result.removed, true)
-  assert.ok(!result.state.hosts.some((host) => host.id === 'delete-me'))
-  assert.equal(rig.credentials.records.has('remote-bash/delete-me'), false)
-  await assert.rejects(rig.service.deleteHost({ id: 'delete-me' }), { code: 'not-found' })
+  assert.ok(!result.state.hosts.some((host) => host.id === toDelete.host.id))
+  assert.equal(rig.credentials.records.has(deleteRef), false)
+  await assert.rejects(rig.service.deleteHost({ id: toDelete.host.id }), { code: 'not-found' })
   await assert.rejects(rig.service.deleteHost({}), { code: 'invalid-host' })
 
   // Deleting a host closes the persistent sessions it owns.
-  await rig.service.saveHost({
+  const sessionHost = await rig.service.saveHost({
     name: 'sess-tmp',
     host: '127.0.0.1',
     port: mock.port,
@@ -705,7 +711,7 @@ test('service.deleteHost: removes host, credentials and its persistent sessions'
   })
   assert.equal(sessionRun.hosts[0].status, 'ok')
   assert.equal(rig.service.listSessions({ agentId: 'agent-del' }).length, 1)
-  await rig.service.deleteHost({ id: 'sess-tmp' })
+  await rig.service.deleteHost({ id: sessionHost.host.id })
   assert.equal(rig.service.listSessions({ agentId: 'agent-del' }).length, 0)
 })
 

@@ -46,13 +46,76 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
   const ssh = createSshClient({ knownHosts, logger })
   const sessions = createSessionManager({ ssh, config, logger })
   const pendingFingerprints = new Map()
+  const testVersions = new Map()
+  const trustVersions = new Map()
+  const executionPlans = new WeakMap()
+  let mutationChain = Promise.resolve()
+  let disposed = false
+  let disposal
+  const lifetime = new AbortController()
+  const operations = new Set()
+
+  function assertOpen() {
+    if (disposed) throw errorWithCode('aborted', '插件已关闭。')
+  }
+
+  function serializeMutation(work) {
+    const next = mutationChain.then(() => { assertOpen(); return work() })
+    mutationChain = next.catch(() => {})
+    return next
+  }
+
+  async function withLifetime(signal, work) {
+    assertOpen()
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const sources = [lifetime.signal, signal].filter(Boolean)
+    for (const source of sources) {
+      if (source.aborted) controller.abort()
+      else source.addEventListener('abort', abort, { once: true })
+    }
+    const operation = Promise.resolve().then(() => { assertOpen(); return work(controller.signal) })
+    operations.add(operation)
+    try { return await operation } finally {
+      operations.delete(operation)
+      for (const source of sources) source.removeEventListener('abort', abort)
+    }
+  }
+
+  function publicHost(host) {
+    const { credentialRef, revision, ...value } = host
+    return value
+  }
+
+  function refOf(host) {
+    return Object.hasOwn(host, 'credentialRef') ? host.credentialRef : `remote-bash/${host.id}`
+  }
+
+  async function cleanupPending(id) {
+    const warnings = []
+    const active = new Set((await inventory.list()).map(refOf).filter(Boolean))
+    for (const item of await inventory.listPendingCleanup()) {
+      if (id && item.id !== id) continue
+      if (active.has(item.ref)) continue
+      try {
+        await secrets.clearRef(item.ref)
+        await inventory.completeCleanup([item.ref])
+      } catch {
+        warnings.push({ code: 'credential-cleanup-pending', message: `主机 ${item.name || item.id} 的旧凭据尚未清理，可在设置页重试。` })
+      }
+    }
+    return warnings
+  }
+
+  const ready = serializeMutation(() => cleanupPending())
+  ready.catch((error) => logger.warn?.(`[remote-bash] 恢复清理失败：${error?.code || 'error'}`))
 
   const timeoutCap = (timeoutSec) => clampInt(timeoutSec, 1, 3600, config.defaultTimeoutSec) * 1000
   const outputCap = (value) => clampInt(value, 1024, 1048576, config.maxOutputBytes)
 
-  async function flagsFor(hostId) {
+  async function flagsFor(host) {
     try {
-      return await secrets.flags(hostId)
+      return await secrets.flagsRef(refOf(host))
     } catch {
       return {
         available: secrets.available(),
@@ -65,8 +128,8 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
   async function state() {
     const hosts = await inventory.list()
     const hostStates = await Promise.all(hosts.map(async (host) => ({
-      ...host,
-      secret: await flagsFor(host.id),
+      ...publicHost(host),
+      secret: await flagsFor(host),
     })))
     const groupMap = new Map()
     for (const host of hostStates) {
@@ -84,54 +147,75 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
         .sort((a, b) => a.tag.localeCompare(b.tag)),
       knownHosts: await knownHosts.list(),
       sessions: sessions.list(),
+      pendingCleanup: [...new Map((await inventory.listPendingCleanup()).map(({ id, name }) => [id, { id, name }])).values()],
     }
   }
 
   async function saveHost(input = {}) {
-    const raw = isPlainObject(input) ? input : {}
-    const secretPatch = isPlainObject(raw.secret) ? raw.secret : {}
-    const clear = Array.isArray(raw.clear) ? raw.clear : []
-    const hasSecretWrite = Object.values(secretPatch).some(
-      (value) => typeof value === 'string' && value.length > 0,
-    )
-    if (hasSecretWrite && !secrets.available()) {
-      throw errorWithCode('credentials-unavailable', 'DSH 凭据服务不可用，无法保存主机密码。')
-    }
-    const host = await inventory.upsert({
-      id: raw.id,
-      name: raw.name,
-      host: raw.host,
-      port: raw.port,
-      username: raw.username,
-      auth: raw.auth,
-      keyPath: raw.keyPath,
-      tags: raw.tags,
-      note: raw.note,
-      sudo: raw.sudo,
+    await ready
+    return serializeMutation(async () => {
+      const raw = isPlainObject(input) ? input : {}
+      const secretPatch = isPlainObject(raw.secret) ? raw.secret : {}
+      const clear = Array.isArray(raw.clear) ? raw.clear : []
+      const changesSecrets = Object.values(secretPatch).some((value) => typeof value === 'string' && value.length > 0) || clear.length > 0
+      if (changesSecrets && !secrets.available()) {
+        throw errorWithCode('credentials-unavailable', 'DSH 凭据服务不可用，无法保存主机密码。')
+      }
+      const previous = raw.id ? await inventory.get(raw.id) : null
+      const prepared = await inventory.prepare({
+        id: raw.id, name: raw.name, host: raw.host, port: raw.port, username: raw.username,
+        auth: raw.auth, keyPath: raw.keyPath, tags: raw.tags, note: raw.note, sudo: raw.sudo,
+      })
+      const oldRef = previous ? refOf(previous) : null
+      if (changesSecrets) {
+        const stagedRef = secrets.createRef()
+        // 先登记无秘密的恢复记录，崩溃后可回收尚未提交的新凭据。
+        await inventory.queueCleanup([{ ref: stagedRef, id: prepared.id, name: prepared.name }])
+        try {
+          prepared.credentialRef = await secrets.stage(oldRef, secretPatch, { clear, ref: stagedRef })
+        } catch (error) {
+          await cleanupPending(prepared.id).catch(() => {})
+          throw error
+        }
+      }
+      let host
+      try {
+        host = await inventory.commitHost(prepared, { retireRefs: oldRef && oldRef !== prepared.credentialRef ? [oldRef] : [] })
+      } catch (error) {
+        await cleanupPending(prepared.id).catch(() => {})
+        throw error
+      }
+      await sessions.closeHost(host.id)
+      if (previous) pendingFingerprints.delete(hostKeyOf(previous.host, previous.port))
+      pendingFingerprints.delete(hostKeyOf(host.host, host.port))
+      const warnings = await cleanupPending(host.id)
+      return { host: { ...publicHost(host), secret: await flagsFor(host) }, warnings, state: await state() }
     })
-    if (hasSecretWrite || clear.length > 0) {
-      await secrets.write(host.id, secretPatch, { clear })
-    }
-    return { host: { ...host, secret: await flagsFor(host.id) }, state: await state() }
   }
 
   async function deleteHost({ id } = {}) {
     if (!id) throw errorWithCode('invalid-host', '缺少主机 id。')
-    const host = await inventory.get(id)
-    if (!host) throw errorWithCode('not-found', `主机不存在：${id}`)
-    const removed = await inventory.remove(id)
-    try {
-      await secrets.clear(id)
-    } catch (error) {
-      logger.warn?.(`[remote-bash] 清理主机凭据失败：${error?.message ?? error}`)
-    }
-    for (const session of sessions.list().filter((entry) => entry.hostId === id)) {
-      await sessions.close(session.key)
-    }
-    return { removed, state: await state() }
+    await ready
+    return serializeMutation(async () => {
+      const host = await inventory.get(id)
+      const pending = (await inventory.listPendingCleanup()).some((entry) => entry.id === id)
+      if (!host && !pending) throw errorWithCode('not-found', `主机不存在：${id}`)
+      const { removed } = await inventory.removeAndRetire(id)
+      await sessions.closeHost(id)
+      if (host) pendingFingerprints.delete(hostKeyOf(host.host, host.port))
+      const warnings = await cleanupPending(id)
+      return { removed: removed || pending, warnings, state: await state() }
+    })
   }
 
-  async function testHost({ id, draft, secret } = {}) {
+  async function cleanupHost({ id } = {}) {
+    if (!id) throw errorWithCode('invalid-host', '缺少主机 id。')
+    await ready
+    return serializeMutation(async () => ({ warnings: await cleanupPending(id), state: await state() }))
+  }
+
+  async function testHost({ id, draft, secret, clear = [], signal } = {}) {
+    await ready
     const hosts = await inventory.list()
     let stored = null
     if (id) {
@@ -149,30 +233,39 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
     } else {
       throw errorWithCode('invalid-host', '测试连接需要已保存主机 id 或主机草稿。')
     }
-    let storedSecret = {}
-    if (stored) {
-      try {
-        storedSecret = await secrets.read(stored.id)
-      } catch {
-        storedSecret = {}
-      }
-    }
+    const storedSecret = stored ? await secrets.readRef(refOf(stored)) : {}
     const overrides = isPlainObject(secret) ? secret : {}
     const merged = { ...storedSecret }
     for (const key of ['password', 'passphrase', 'privateKey', 'sudoPassword']) {
       const value = overrides[key]
       if (typeof value === 'string' && value.length > 0) merged[key] = value
     }
+    for (const field of Array.isArray(clear) ? clear : []) {
+      if (['password', 'passphrase', 'privateKey', 'sudoPassword'].includes(field)) delete merged[field]
+    }
+    const target = { host: host.host, port: host.port }
+    const testKey = hostKeyOf(host.host, host.port)
+    const testVersion = (testVersions.get(testKey) || 0) + 1
+    testVersions.set(testKey, testVersion)
+    pendingFingerprints.delete(testKey)
+    const trustVersion = trustVersions.get(testKey) || 0
+    const testIsCurrent = async () => testVersions.get(testKey) === testVersion &&
+      (trustVersions.get(testKey) || 0) === trustVersion &&
+      (!stored || (await inventory.get(stored.id))?.revision === stored.revision)
     const startedAt = nowMs()
     try {
-      const connection = await ssh.connect(host, merged, { timeoutMs: 20000 })
+      const connection = await ssh.connect(host, merged, { timeoutMs: 20000, signal })
       try {
         connection.client.end()
       } catch {
         // 已结束。
       }
+      if (!await testIsCurrent()) {
+        throw errorWithCode('target-changed', '测试期间主机配置已改变，请重新测试。')
+      }
       pendingFingerprints.delete(hostKeyOf(host.host, host.port))
       return {
+        target,
         ok: true,
         elapsedMs: nowMs() - startedAt,
         banner: connection.banner || '',
@@ -182,6 +275,9 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
       }
     } catch (error) {
       const elapsedMs = nowMs() - startedAt
+      if (!await testIsCurrent()) {
+        return { ok: false, target, elapsedMs, hostKeyStatus: 'unknown', error: { code: 'target-changed', message: '测试期间主机配置已改变，请重新测试。' } }
+      }
       if (error?.code === 'host-key-changed') {
         const details = error.details ?? {}
         pendingFingerprints.set(hostKeyOf(host.host, host.port), {
@@ -191,6 +287,7 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
         })
         return {
           ok: false,
+          target,
           elapsedMs,
           fingerprint: details.fingerprint,
           keyType: details.keyType,
@@ -200,6 +297,7 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
       }
       return {
         ok: false,
+        target,
         elapsedMs,
         hostKeyStatus: 'unknown',
         error: { code: error?.code ?? 'error', message: error?.message ?? String(error) },
@@ -216,6 +314,8 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
   }
 
   async function resolveTargets(targets) {
+    await ready
+    assertOpen()
     const hosts = await inventory.list()
     if (hosts.length === 0) {
       throw errorWithCode('no-hosts', '还没有配置远程主机，请先在 DSH 设置 → Remote Bash 中添加主机。')
@@ -251,6 +351,42 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
     return [...picked.values()]
   }
 
+  function identityOf(host) {
+    return JSON.stringify([host.revision, host.host, host.port, host.username, host.auth, host.keyPath, host.sudo, refOf(host)])
+  }
+
+  async function prepareRun(options = {}) {
+    const command = String(options.command ?? '')
+    if (!command.trim()) throw errorWithCode('invalid-command', 'command 不能为空。')
+    const hosts = await resolveTargets(options.targets)
+    const session = typeof options.session === 'string' && options.session.trim() ? options.session.trim() : undefined
+    if (session && !/^[A-Za-z0-9_.-]{1,32}$/.test(session)) {
+      throw errorWithCode('invalid-session', 'session 名只能包含字母、数字、点、下划线、连字符，且不超过 32 个字符。')
+    }
+    const captured = hosts.map((host) => ({
+      host: structuredClone(host), identity: identityOf(host),
+      trustVersion: trustVersions.get(hostKeyOf(host.host, host.port)) || 0,
+      useSudo: options.sudo === undefined ? host.sudo === true : options.sudo === true,
+    }))
+    const plan = Object.freeze({ hosts: Object.freeze(captured.map(({ host, useSudo }) => Object.freeze({ ...publicHost(host), useSudo }))) })
+    executionPlans.set(plan, {
+      captured,
+      options: { command, session, cwd: typeof options.cwd === 'string' && options.cwd.trim() ? options.cwd.trim() : undefined,
+        sudo: options.sudo, timeoutMs: timeoutCap(options.timeoutSec), maxOutputBytes: outputCap(options.maxOutputBytes) },
+    })
+    return plan
+  }
+
+  async function validateTarget(captured) {
+    if (disposed) throw errorWithCode('aborted', '插件已关闭。')
+    const host = captured.host
+    const current = await inventory.get(host.id)
+    if (!current || identityOf(current) !== captured.identity ||
+      (trustVersions.get(hostKeyOf(host.host, host.port)) || 0) !== captured.trustVersion) {
+      throw errorWithCode('target-changed', `主机 ${host.name} 的配置或信任状态已改变，本次未继续执行，请重新发起调用。`)
+    }
+  }
+
   function summarizeRun(result, startedAt, timeoutMs) {
     const timedOut = Boolean(result.timedOut)
     const aborted = Boolean(result.aborted)
@@ -284,12 +420,12 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
       username: host.username,
     }
     try {
-      const secret = await secrets.read(host.id)
+      if (options.signal?.aborted) throw errorWithCode('aborted', '执行已取消。')
+      await options.validate()
+      const secret = await secrets.readRef(refOf(host))
       const useSudo = options.sudo === undefined ? host.sudo === true : options.sudo === true
       const sudoPassword = useSudo ? secret.sudoPassword || secret.password || '' : undefined
-      if (useSudo && !sudoPassword) {
-        throw errorWithCode('sudo-password-missing', `主机 ${host.name} 未配置 sudo 密码。`)
-      }
+      await options.validate()
       if (options.session) {
         const result = await sessions.run({
           agentId: options.agentId || 'unknown',
@@ -303,6 +439,7 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
           timeoutMs: options.timeoutMs,
           maxOutputBytes: options.maxOutputBytes,
           signal: options.signal,
+          validate: options.validate,
         })
         return { ...base, ...summarizeRun(result, startedAt, options.timeoutMs), sessionKey: result.sessionKey }
       }
@@ -312,7 +449,8 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
       })
       let result
       try {
-        const { remoteCommand } = buildCommand({
+        await options.validate()
+        const { remoteCommand, sudoInput } = buildCommand({
           command: options.command,
           cwd: options.cwd,
           sudo: useSudo,
@@ -320,6 +458,7 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
         })
         result = await ssh.exec(connection.client, {
           command: remoteCommand,
+          sudoInput,
           timeoutMs: options.timeoutMs,
           signal: options.signal,
           maxOutputBytes: options.maxOutputBytes,
@@ -364,40 +503,26 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
     }
   }
 
-  async function run({
-    targets,
-    command,
-    cwd,
-    timeoutSec,
-    session,
-    sudo,
-    maxOutputBytes,
-    agentId,
-    signal,
-  } = {}) {
-    const text = String(command ?? '')
-    if (!text.trim()) throw errorWithCode('invalid-command', 'command 不能为空。')
-    const hosts = await resolveTargets(targets)
-    const timeoutMs = timeoutCap(timeoutSec)
-    const cap = outputCap(maxOutputBytes)
+  async function run(args = {}) {
+    const plan = args.plan || await prepareRun(args)
+    const prepared = executionPlans.get(plan)
+    if (!prepared) throw errorWithCode('invalid-plan', '执行计划不存在或已经使用。')
+    executionPlans.delete(plan)
+    const { captured, options } = prepared
     const startedAt = nowMs()
-    const results = await mapLimit(hosts, config.maxParallelHosts, (host) =>
-      runOne(host, {
-        command: text,
-        cwd: typeof cwd === 'string' && cwd.trim() ? cwd.trim() : undefined,
-        timeoutMs,
-        maxOutputBytes: cap,
-        session: typeof session === 'string' && session.trim() ? session.trim() : undefined,
-        sudo,
-        agentId,
-        signal,
+    const results = await mapLimit(captured, config.maxParallelHosts, (target) =>
+      runOne(target.host, {
+        ...options,
+        agentId: args.agentId,
+        signal: args.signal,
+        validate: () => validateTarget(target),
       }),
     )
     return {
-      command: text,
-      cwd: cwd ?? null,
-      session: session ?? null,
-      sudo: sudo === true,
+      command: options.command,
+      cwd: options.cwd ?? null,
+      session: options.session ?? null,
+      sudo: captured.some((target) => target.useSudo),
       startedAt,
       durationMs: nowMs() - startedAt,
       hosts: results.map((entry) => entry.ok ? entry.value : ({
@@ -419,16 +544,21 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
 
   async function transferHost(host, { action, localPath, remotePath, timeoutMs, signal, multi }) {
     const startedAt = nowMs()
+    const deadline = startedAt + timeoutMs
     const base = { hostId: host.id, name: host.name }
+    const captured = { host, identity: identityOf(host), trustVersion: trustVersions.get(hostKeyOf(host.host, host.port)) || 0 }
     try {
-      const secret = await secrets.read(host.id)
-      const connection = await ssh.connect(host, secret, { timeoutMs: 20000, signal })
+      if (signal?.aborted) throw errorWithCode('aborted', '传输已取消。')
+      await validateTarget(captured)
+      const secret = await secrets.readRef(refOf(host))
+      const connection = await ssh.connect(host, secret, { timeoutMs: Math.max(1, Math.min(20000, deadline - nowMs())), signal })
       try {
-        const home = await remoteHome(connection.client)
+        await validateTarget(captured)
+        const home = await remoteHome(connection.client, { deadline, signal })
         if (action === 'upload') {
           const source = resolveLocalPath(applyTemplate(localPath, host))
           const target = expandRemotePath(applyTemplate(remotePath, host), home)
-          const result = await upload({ client: connection.client, localPath: source, remotePath: target, timeoutMs, signal })
+          const result = await upload({ client: connection.client, localPath: source, remotePath: target, timeoutMs, deadline, signal })
           return { ...base, status: 'ok', bytes: result.bytes, durationMs: nowMs() - startedAt, localPath: source, remotePath: target }
         }
         const remoteTemplate = String(remotePath ?? '')
@@ -441,19 +571,20 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
         let destination = resolveLocalPath(applyTemplate(localTemplate, host, { basename: path.posix.basename(remoteTarget) }))
         if (!hasHostToken) {
           // 多主机下载到同一目录/文件必须区分，否则互相覆盖。
-          const stats = await remoteStat(connection.client, remoteTarget)
+          const stats = await remoteStat(connection.client, remoteTarget, { deadline, signal })
           if (!stats) throw errorWithCode('remote-not-found', `远端路径不存在：${remoteTarget}`)
           const baseName = path.posix.basename(remoteTarget)
+          const hostName = host.name === '.' || host.name === '..' ? host.id : encodeURIComponent(host.name)
           if (stats.isDirectory) {
-            if (multi) destination = path.join(destination, host.name)
+            if (multi) destination = path.join(destination, hostName)
           } else if (multi) {
-            destination = path.join(destination, `${host.name}-${baseName}`)
+            destination = path.join(destination, `${hostName}-${baseName}`)
           } else if (localTemplate.endsWith('/') || await isExistingDirectory(destination)) {
             // 单主机下载文件但 localPath 是目录：落到目录里的同名文件。
             destination = path.join(destination, baseName)
           }
         }
-        const result = await download({ client: connection.client, remotePath: remoteTarget, localPath: destination, timeoutMs, signal })
+        const result = await download({ client: connection.client, remotePath: remoteTarget, localPath: destination, timeoutMs, deadline, signal })
         return { ...base, status: 'ok', bytes: result.bytes, durationMs: nowMs() - startedAt, localPath: destination, remotePath: remoteTarget }
       } finally {
         try {
@@ -499,19 +630,25 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
     }
   }
 
+  async function invalidateTrust(host, port) {
+    const key = hostKeyOf(host, port)
+    trustVersions.set(key, (trustVersions.get(key) || 0) + 1)
+    for (const entry of await inventory.list()) {
+      if (hostKeyOf(entry.host, entry.port) === key) await sessions.closeHost(entry.id)
+    }
+  }
+
   return {
-    state,
+    async state() { await ready; return serializeMutation(state) },
     saveHost,
     deleteHost,
-    testHost,
+    cleanupHost,
+    testHost: (args = {}) => withLifetime(args.signal, (signal) => testHost({ ...args, signal })),
     resolveTargets,
-    run,
-    async upload({ targets, localPath, remotePath, timeoutSec, signal }) {
-      return transfer({ action: 'upload', targets, localPath, remotePath, timeoutSec, signal })
-    },
-    async download({ targets, remotePath, localPath, timeoutSec, signal }) {
-      return transfer({ action: 'download', targets, localPath, remotePath, timeoutSec, signal })
-    },
+    prepareRun,
+    run: (args = {}) => withLifetime(args.signal, (signal) => run({ ...args, signal })),
+    upload: (args = {}) => withLifetime(args.signal, (signal) => transfer({ ...args, action: 'upload', signal })),
+    download: (args = {}) => withLifetime(args.signal, (signal) => transfer({ ...args, action: 'download', signal })),
     listSessions({ agentId } = {}) {
       return sessions.list({ agentId })
     },
@@ -527,32 +664,46 @@ export function createService({ config, paths, inventory, knownHosts, secrets, a
     },
     async forgetKnownHost({ host, port } = {}) {
       if (!host) throw errorWithCode('invalid-host', '缺少主机地址。')
-      const removed = await knownHosts.forget(host, Number(port) || 22)
-      pendingFingerprints.delete(hostKeyOf(host, Number(port) || 22))
-      return { removed, state: await state() }
+      await ready
+      return serializeMutation(async () => {
+        const removed = await knownHosts.forget(host, Number(port) || 22)
+        pendingFingerprints.delete(hostKeyOf(host, Number(port) || 22))
+        await invalidateTrust(host, Number(port) || 22)
+        return { removed, state: await state() }
+      })
     },
     async approveFingerprint({ host, port, fingerprint } = {}) {
       if (!host) throw errorWithCode('invalid-host', '缺少主机地址。')
-      const key = hostKeyOf(host, Number(port) || 22)
-      const pending = pendingFingerprints.get(key)
-      if (!pending) {
-        throw errorWithCode('no-pending-fingerprint', '没有待确认的新指纹，请先点「测试连接」触发一次校验。')
-      }
-      if (fingerprint && fingerprint !== pending.fingerprint) {
-        throw errorWithCode('fingerprint-mismatch', '确认的指纹与最近一次连接看到的新指纹不一致，请重新测试连接。')
-      }
-      const entry = await knownHosts.approve({
-        host,
-        port: Number(port) || 22,
-        keyType: pending.keyType,
-        fingerprint: pending.fingerprint,
+      await ready
+      return serializeMutation(async () => {
+        const key = hostKeyOf(host, Number(port) || 22)
+        const pending = pendingFingerprints.get(key)
+        if (!pending) {
+          throw errorWithCode('no-pending-fingerprint', '没有待确认的新指纹，请先点「测试连接」触发一次校验。')
+        }
+        if (!fingerprint || fingerprint !== pending.fingerprint || nowMs() - pending.at > 300000) {
+          throw errorWithCode('fingerprint-mismatch', '确认的指纹与最近一次连接看到的新指纹不一致，请重新测试连接。')
+        }
+        const entry = await knownHosts.approve({
+          host,
+          port: Number(port) || 22,
+          keyType: pending.keyType,
+          fingerprint: pending.fingerprint,
+        })
+        pendingFingerprints.delete(key)
+        await invalidateTrust(host, Number(port) || 22)
+        return { entry, state: await state() }
       })
-      pendingFingerprints.delete(key)
-      return { entry, state: await state() }
     },
     dispose() {
-      pendingFingerprints.clear()
-      sessions.dispose()
+      if (!disposal) {
+        disposed = true
+        lifetime.abort()
+        pendingFingerprints.clear()
+        testVersions.clear()
+        disposal = Promise.allSettled([sessions.dispose(), mutationChain, ...operations]).then(() => {})
+      }
+      return disposal
     },
   }
 }

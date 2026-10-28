@@ -2,7 +2,7 @@
  * End-to-end tests for host/ssh.js + host/shell.js against the real mock SSH
  * server: password/key auth, TOFU fingerprints, exec semantics (stdout/stderr,
  * exit codes, truncation, timeout, abort), remoteHome/expandRemotePath,
- * buildCommand (incl. sudo heredoc) and the persistent shell.
+ * buildCommand (prompt-driven sudo input) and the persistent shell.
  */
 
 import assert from 'node:assert/strict'
@@ -304,21 +304,22 @@ test('ssh.buildCommand: quotes cwd and keeps sudo passwords out of argv', () => 
   })
 
   const sudo = buildCommand({ command: 'echo hi', sudo: true, sudoPassword: 'sudo-secret' })
-  assert.equal(Object.keys(sudo).sort().join(','), 'remoteCommand')
-  const firstLine = sudo.remoteCommand.split('\n', 1)[0]
-  assert.match(firstLine, /^sudo -S -p '' -- bash -lc '/)
-  assert.ok(!firstLine.includes('sudo-secret'), 'password must live in the heredoc body, not argv')
-  const match = sudo.remoteCommand.match(/<<'(__RB_SUDO_[0-9a-f]+__)'\nsudo-secret\n\1$/)
-  assert.ok(match, `unexpected heredoc format: ${JSON.stringify(sudo.remoteCommand)}`)
+  assert.equal(Object.keys(sudo).sort().join(','), 'remoteCommand,sudoInput')
+  assert.ok(!sudo.remoteCommand.includes('sudo-secret'), 'entire command must exclude the password')
+  assert.equal(sudo.sudoInput.password, 'sudo-secret')
+  assert.match(sudo.sudoInput.prompt, /^__RB_SUDO_[0-9a-f]{48}__$/)
+  assert.ok(sudo.remoteCommand.includes(sudo.sudoInput.prompt))
+  assert.match(sudo.remoteCommand, /exec <\/dev\/null/)
 
   const combined = buildCommand({ command: 'echo hi', cwd: '/srv/app', sudo: true, sudoPassword: 'pw' })
   assert.match(combined.remoteCommand, /^cd '\/srv\/app' && \(\nsudo -S/)
-  assert.match(combined.remoteCommand, /\npw\n__RB_SUDO_[0-9a-f]+__\n\)$/)
+  assert.ok(!combined.remoteCommand.includes('pw'))
+  assert.equal(combined.sudoInput.password, 'pw')
 
   const quoted = buildCommand({ command: "echo 'quoted arg'", sudo: true, sudoPassword: 'pw' })
   assert.ok(quoted.remoteCommand.includes(`'\\''`), quoted.remoteCommand)
 
-  assert.throws(() => buildCommand({ command: 'id', sudo: true }), { code: 'sudo-password-missing' })
+  assert.equal(buildCommand({ command: 'id', sudo: true }).sudoInput.password, '', 'NOPASSWD requires no configured password; reject only when sudo requests one')
   assert.throws(
     () => buildCommand({ command: 'id', sudo: true, sudoPassword: 'line1\nline2' }),
     { code: 'invalid-secret' },
@@ -349,8 +350,8 @@ test('shell: cd and export persist across run() calls, exit codes and stderr wor
       const failed = await session.run('false')
       assert.equal(failed.code, 1)
 
-      // Give stderr its own wire packets before the end marker (separate pipes).
-      const stderr = await session.run('echo oops >&2; sleep 0.2')
+      // Completion waits for both stream markers; stderr needs no timing workaround.
+      const stderr = await session.run('echo oops >&2')
       assert.equal(stderr.code, 0)
       assert.match(stderr.output, /\[stderr\]\noops/)
     } finally {

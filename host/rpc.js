@@ -34,6 +34,7 @@ export function installRpc(ctx, { service, logger = console }) {
     state: () => service.state(),
     'host.save': (payload) => service.saveHost(payload),
     'host.delete': (payload) => service.deleteHost(payload),
+    'host.cleanup': (payload) => service.cleanupHost(payload),
     'host.test': (payload) => service.testHost(payload),
     'knownHost.forget': (payload) => service.forgetKnownHost(payload),
     'knownHost.approve': (payload) => service.approveFingerprint(payload),
@@ -94,23 +95,25 @@ export function installRpc(ctx, { service, logger = console }) {
   }
 
   return ctx.effect(() => {
-    let dispose = null
-    let disposed = false
-    connection.fetch.register(route)
-      .then((fn) => {
-        if (disposed) fn?.()
-        else dispose = fn
-      })
-      .catch((error) => {
-        logger.error?.('[remote-bash] 注册设置页面数据通道失败', error)
-      })
+    // Current DSH returns a disposer synchronously; older versions returned a
+    // Promise. Await either form on teardown, including unload before readiness.
+    const registration = connection.fetch.register(route)
+    let cleanup = null
+    const ready = Promise.resolve(registration).catch((error) => {
+      logger.error?.('[remote-bash] 注册设置页面数据通道失败', error)
+      return null
+    })
     return () => {
-      disposed = true
-      try {
-        dispose?.()
-      } catch (error) {
-        logger.warn?.('[remote-bash] 清理设置页面数据通道失败', error)
+      if (!cleanup) {
+        cleanup = ready.then(async (dispose) => {
+          try {
+            await dispose?.()
+          } catch (error) {
+            logger.warn?.('[remote-bash] 清理设置页面数据通道失败', error)
+          }
+        })
       }
+      return cleanup
     }
   }, 'remote-bash.rpc')
 }

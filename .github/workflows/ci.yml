@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        node-version: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,3 +24,38 @@ jobs:
       - run: npm ci
       - run: node --check client.js
       - run: npm test
+      - run: bash -n tests/openssh-ci.sh
+
+  openssh-sudo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      FIXTURE_CONTAINER: remote-bash-openssh-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test real OpenSSH and sudo in a disposable container
+        shell: bash
+        run: |
+          docker run --rm --init --name "$FIXTURE_CONTAINER" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/source,readonly" \
+            --env GITHUB_ACTIONS=true --env RB_OPENSSH_CI_CONTAINER=1 \
+            node:22-bookworm bash -euc '
+              # Block package post-install scripts from starting a system daemon.
+              printf "#!/bin/sh\nexit 101\n" > /usr/sbin/policy-rc.d
+              chmod 0755 /usr/sbin/policy-rc.d
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps
+              cp -a /source /work
+              cd /work
+              npm ci
+              bash tests/openssh-ci.sh
+            '
+      - name: Remove only this job fixture container
+        if: always()
+        shell: bash
+        run: |
+          # No ports are published, no host directories are writable, and the
+          # exact container name is confined to this workflow run and attempt.
+          if docker container inspect "$FIXTURE_CONTAINER" >/dev/null 2>&1; then
+            docker container rm --force "$FIXTURE_CONTAINER"
+          fi

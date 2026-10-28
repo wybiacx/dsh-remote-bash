@@ -117,26 +117,27 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`
 }
 
-/** The fake sudo binary: checks the first stdin line, then execs the rest. */
+/** Protocol-faithful sudo shim: prompt before reading; cached/NOPASSWD never reads stdin. */
 function renderSudoShim(sudoPassword) {
   return `#!/bin/bash
-# Fake sudo for the Remote Bash test SSH server.
-# Reads the password from the first stdin line (like sudo -S) and, on a match,
-# strips sudo's options and runs the remaining argv.
-IFS= read -r __rb_sudo_password || __rb_sudo_password=''
-if [ "$__rb_sudo_password" != ${shellQuote(sudoPassword)} ]; then
-  echo 'sudo: a password is required' >&2
-  exit 1
-fi
+__rb_prompt=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -p) shift; [ "$#" -gt 0 ] && shift ;;
+    -p) shift; __rb_prompt="$1"; shift ;;
     -S|-k|-n|-E|-H|-A|-b|-i|-s) shift ;;
     --) shift; break ;;
     -*) shift ;;
     *) break ;;
   esac
 done
+if [ "\${RB_TEST_SUDO_MODE:-password}" = password ]; then
+  printf '%s' "$__rb_prompt" >&2
+  IFS= read -r __rb_sudo_password || __rb_sudo_password=''
+  if [ "$__rb_sudo_password" != ${shellQuote(sudoPassword)} ]; then
+    echo 'sudo: a password is required' >&2
+    exit 1
+  fi
+fi
 exec "$@"
 `
 }
@@ -246,8 +247,11 @@ export function createMockServer(options = {}) {
   // passes the containment check.
   const dataDirReal = fs.realpathSync.native(dataDir)
   let connectionCount = 0
+  let ptyRequests = 0
 
   const mock = {
+    get connectionCount() { return connectionCount },
+    get ptyRequests() { return ptyRequests },
     /** Data directory backing HOME + SFTP (also available as `sftpRoot`). */
     dataDir,
     get sftpRoot() {
@@ -421,9 +425,8 @@ export function createMockServer(options = {}) {
     client.on('ready', () => {
       client.on('session', (accept) => {
         const session = accept()
-        // Accept a PTY request even though the Remote Bash client does not ask
-        // for one; output is still produced by a plain pipe.
-        session.on('pty', (acceptPty) => acceptPty && acceptPty())
+        // This fixture is pipe-backed: reject PTYs instead of silently pretending to be a terminal.
+        session.on('pty', (_acceptPty, rejectPty) => { ptyRequests += 1; rejectPty?.() })
         session.on('env', (acceptEnv) => acceptEnv && acceptEnv())
         session.on('exec', (acceptExec, _reject, info) => {
           handleExec(acceptExec(), info.command, workDir)
@@ -596,14 +599,14 @@ export function createMockServer(options = {}) {
       }
     }
 
-    function resolvePath(input) {
+    function resolvePath(input, followLeaf = true) {
       let target
       if (input === '') target = cwd
       else if (input === '~') target = homeDir
       else if (input.startsWith('~/')) target = path.join(homeDir, input.slice(2))
       else if (path.isAbsolute(input)) target = input
       else target = path.resolve(cwd, input)
-      const resolved = canonicalize(target)
+      const resolved = followLeaf ? canonicalize(target) : path.join(canonicalize(path.dirname(target)), path.basename(target))
       const rel = path.relative(dataDirReal, resolved)
       if (rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel))) {
         const error = new Error(`Path escapes the mock SFTP root: ${input}`)
@@ -708,7 +711,7 @@ export function createMockServer(options = {}) {
     sftp.on('LSTAT', (reqid, filename) => {
       let target
       try {
-        target = resolvePath(filename)
+        target = resolvePath(filename, false)
       } catch (error) {
         return statusForError(reqid, error)
       }

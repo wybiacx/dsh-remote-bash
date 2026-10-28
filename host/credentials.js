@@ -1,13 +1,22 @@
-/**
- * 凭据存储适配器：密码/私钥口令/sudo 密码放在 DSH 内置凭据库的 records 空间，
- * 地址 remote-bash/<hostId>，kind='grant'，payload 为 JSON 对象。
- * 明文只在 Host 进程内存里出现，永不回传浏览器、也不进模型上下文。
- */
+/** Credential records are referenced explicitly; secrets never enter inventory data. */
+import crypto from 'node:crypto'
 import { errorWithCode, isPlainObject } from './util.js'
 
-/** records 空间地址。 */
+/** Legacy host-id address, retained for v1 inventories and callers. */
 export function recordKey(hostId) {
   return `remote-bash/${hostId}`
+}
+
+export function isManagedCredentialRef(ref) {
+  return typeof ref === 'string' && (
+    /^remote-bash\/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/.test(ref)
+    || /^remote-bash\/refs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(ref)
+  )
+}
+
+function requireRef(ref) {
+  if (!isManagedCredentialRef(ref)) throw errorWithCode('invalid-credential-ref', '拒绝访问不属于 Remote Bash 的凭据。')
+  return ref
 }
 
 const FIELDS = ['password', 'passphrase', 'privateKey', 'sudoPassword']
@@ -21,78 +30,97 @@ function pickSecrets(payload) {
   return result
 }
 
+function mergeSecrets(current, patch, clear) {
+  const next = pickSecrets(current)
+  for (const field of FIELDS) {
+    const value = patch?.[field]
+    if (Object.hasOwn(patch ?? {}, field) && typeof value === 'string' && value.length > 0) next[field] = value
+  }
+  for (const field of Array.isArray(clear) ? clear : []) {
+    if (FIELDS.includes(field)) delete next[field]
+  }
+  return next
+}
+
+function payloadOf(record) {
+  return record?.kind === 'grant' && isPlainObject(record.payload) ? record.payload : {}
+}
+
 export function createSecretStore({ credentials }) {
   const available = Boolean(credentials && typeof credentials.readRecord === 'function')
-
   function requireStore() {
-    if (!available) {
-      throw errorWithCode('credentials-unavailable', 'DSH 凭据服务不可用，无法保存或读取主机密码。')
-    }
+    if (!available) throw errorWithCode('credentials-unavailable', 'DSH 凭据服务不可用，无法保存或读取主机密码。')
   }
-
-  async function read(hostId) {
+  async function readRef(ref) {
+    if (ref == null) return {}
+    requireRef(ref)
     if (!available) return {}
-    let record
     try {
-      record = await credentials.readRecord(recordKey(hostId))
+      return pickSecrets(payloadOf(await credentials.readRecord(ref)))
     } catch (error) {
       throw errorWithCode('credentials-error', `读取凭据失败：${error?.message ?? error}`)
     }
-    if (!record || record.kind !== 'grant') return {}
-    const payload = isPlainObject(record.payload) ? record.payload : {}
-    return pickSecrets(payload)
   }
-
+  async function flagsRef(ref) {
+    const secrets = await readRef(ref)
+    const fields = Object.fromEntries(FIELDS.map((field) => [field, Boolean(secrets[field])]))
+    return { available, configured: Object.values(fields).some(Boolean), fields }
+  }
+  async function clearRef(ref) {
+    if (ref == null) return
+    requireRef(ref)
+    requireStore()
+    try {
+      await credentials.deleteRecord(ref)
+    } catch (error) {
+      throw errorWithCode('credentials-error', `删除凭据失败：${error?.message ?? error}`)
+    }
+  }
+  const createRef = () => `remote-bash/refs/${crypto.randomUUID()}`
   return {
-    available() {
-      return available
-    },
-    async read(hostId) {
-      return read(hostId)
-    },
-    async flags(hostId) {
-      const secrets = await read(hostId)
-      const fields = {}
-      for (const field of FIELDS) fields[field] = typeof secrets[field] === 'string' && secrets[field].length > 0
-      return {
-        available,
-        configured: Object.values(fields).some(Boolean),
-        fields,
+    available: () => available,
+    createRef,
+    readRef,
+    flagsRef,
+    clearRef,
+    /** Stage a complete merged snapshot in a fresh record; caller journals ref first. */
+    async stage(baseRef, patch = {}, { clear = [], ref = createRef() } = {}) {
+      requireStore()
+      requireRef(ref)
+      if (!ref.startsWith('remote-bash/refs/') || ref === baseRef) {
+        throw errorWithCode('invalid-credential-ref', '暂存凭据必须使用新的独立引用。')
       }
+      const next = mergeSecrets(await readRef(baseRef), patch, clear)
+      if (Object.keys(next).length === 0) return null
+      try {
+        await credentials.modifyRecord(ref, async (current) => {
+          if (current !== undefined) throw errorWithCode('credential-ref-conflict', '暂存凭据引用已存在。')
+          return { kind: 'grant', payload: next }
+        })
+      } catch (error) {
+        throw errorWithCode(error?.code === 'credential-ref-conflict' ? error.code : 'credentials-error', `保存凭据失败：${error?.message ?? error}`)
+      }
+      return ref
     },
-    /**
-     * 合并写入：patch 中出现的非空字段覆盖；clear 中列出的字段删除。
-     * 全部为空时删除整条 record。
-     */
+    read: (hostId) => readRef(recordKey(hostId)),
+    flags: (hostId) => flagsRef(recordKey(hostId)),
+    /** Merge inside the provider's exclusive callback, including field clears. */
     async write(hostId, patch = {}, { clear = [] } = {}) {
       requireStore()
-      const current = await read(hostId)
-      const next = { ...current }
-      for (const field of FIELDS) {
-        if (Object.hasOwn(patch ?? {}, field)) {
-          const value = patch[field]
-          if (typeof value === 'string' && value.length > 0) next[field] = value
-        }
-      }
-      const clearSet = new Set(Array.isArray(clear) ? clear.filter((field) => FIELDS.includes(field)) : [])
-      for (const field of clearSet) delete next[field]
-      if (Object.keys(next).length === 0) {
-        await this.clear(hostId)
-        return
-      }
+      const ref = requireRef(recordKey(hostId))
       try {
-        await credentials.modifyRecord(recordKey(hostId), async () => ({ kind: 'grant', payload: next }))
+        await credentials.modifyRecord(ref, async (current) => ({
+          kind: 'grant',
+          // An empty grant is intentional: deleteRecord cannot join this transaction.
+          payload: mergeSecrets(payloadOf(current), patch, clear),
+        }))
       } catch (error) {
         throw errorWithCode('credentials-error', `保存凭据失败：${error?.message ?? error}`)
       }
     },
     async clear(hostId) {
       if (!available) return
-      try {
-        await credentials.deleteRecord(recordKey(hostId))
-      } catch (error) {
-        throw errorWithCode('credentials-error', `删除凭据失败：${error?.message ?? error}`)
-      }
+      return clearRef(recordKey(hostId))
     },
   }
 }

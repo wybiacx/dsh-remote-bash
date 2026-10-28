@@ -157,7 +157,7 @@ function sftpCall(session, method, ...args) {
 
 function shellOpen(client) {
   return new Promise((resolve, reject) => {
-    client.shell((error, stream) => {
+    client.shell(false, (error, stream) => {
       if (error) return reject(error)
       const state = { stream, output: '' }
       stream.on('data', (data) => {

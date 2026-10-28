@@ -117,13 +117,13 @@ The full path of one call:
 
 ![Call flow](docs/images/flow.en.png)
 
-**Credentials.** Passwords, key passphrases and sudo passwords go into the `records` space of the DSH credential store (`remote-bash/<hostId>`) with file mode 0600. Reads and writes happen only inside the Host process, and the API returns just "configured / not configured". One boundary is worth stating: like the DSH credential store itself, any process running as the same OS user (including the agent's shell tools) can read that file in principle. That is a file-permission limit; the plugin cannot isolate further.
+**Credentials.** Passwords, key passphrases and sudo passwords go into the `records` space of the DSH credential store (`remote-bash/refs/<UUID>`; legacy `remote-bash/<hostId>` records remain readable) with file mode 0600. Reads and writes happen only inside the Host process, and the API returns just "configured / not configured". One boundary is worth stating: like the DSH credential store itself, any process running as the same OS user (including the agent's shell tools) can read that file in principle. That is a file-permission limit; the plugin cannot isolate further.
 
 **Host keys.** On first connect the SHA256 fingerprint of the host key is written to `known_hosts.json`, and every later connection is checked against it. A mismatch rejects the connection and leaves the new fingerprint pending in Settings; approving it affects that one host. This protects against man-in-the-middle and also catches a replaced machine.
 
 **Dangerous commands.** Commands matching a built-in rule (`rm -rf` on dangerous paths, `mkfs`, `dd` to a device, shutdown, stopping critical services, account changes, firewall flushes, overwriting system config, etc.) or carrying `sudo` go through `ctx.approval`. The rules are regex heuristics: they can miss and they can false-positive, and a false positive costs one extra confirmation. Add `extraDangerousPatterns`, or use `approvalMode: always`. If the approval service is unavailable, the command is denied.
 
-**sudo passwords** are passed to `sudo -S` through a heredoc on stdin. They never appear in argv or `ps`, and are not logged.
+**sudo passwords** are sent through SSH stdin only after a per-command authentication prompt. Generated commands contain no password, and the target command has separate, empty stdin. Cached authentication and NOPASSWD send no password. Sudo runs a non-login Bash shell, so it does not automatically source login profiles.
 
 **Commands and output** become part of the current session record; that is how DSH works, so keep secrets out of commands. The plugin does not collect data and does not talk to any network address other than the hosts you configure.
 
@@ -135,7 +135,7 @@ Report security issues privately as described in [SECURITY.en.md](SECURITY.en.md
 
 The Host process opens SSH connections itself, using the pure-JS `ssh2` package. That avoids depending on the local ssh version and needs no askpass helper for password auth; SSH agent forwarding is not implemented. The browser half only handles the Settings page and talks to the Host over a DSH-authenticated local RPC (`/api/remote-bash/rpc`).
 
-Persistent sessions are `bash -s` on the same SSH channel, without a PTY. `cd` and `export` survive between calls; terminal programs such as vim or top do not work. When a command in a session times out, the session is closed and reconnects automatically on the next call.
+Persistent sessions are `bash -s` on the same SSH channel, without a PTY. `cd` and `export` survive between calls; terminal programs such as vim or top do not work. Commands have empty stdin by default; use explicit pipes or redirection when input is needed. Cancelling or timing out an active session command closes that session; a later call can create a new one. Busy sessions are not evicted as idle. Cancelling a queued call does not cancel another active call.
 
 ## Repository layout
 
@@ -146,6 +146,16 @@ tests/         End-to-end tests and the mock SSH server
 docs/images/   README artwork (SVG sources + PNG exports)
 INTERFACE.md   Host/Client interface contract
 ```
+
+## Execution and recovery
+
+Approval uses a fixed target snapshot. New group members are not silently added while approval is pending; changing a selected host returns `target-changed` before further execution on that host. Explicit `sudo: false` overrides the host default. Do not automatically retry commands that may already have changed remote state. Cancellation closes client channels and stops further dispatch; it cannot guarantee termination of detached remote processes or roll back side effects.
+
+Downloads reject path traversal and destination symlinks. Files are downloaded to private temporary storage beside the destination and replaced only on success; existing file contents survive failed transfers. Remote directory symlinks are not followed.
+
+Inventory v1 upgrades to v2 on the first write, retaining existing host IDs and credentials. A non-secret `inventory.json.v1.bak` is created before migration. New hosts receive unique IDs; selecting hosts by name continues to work. Save stages a new credential record before atomically switching its inventory reference. Interrupted or failed cleanup remains visible in Settings and can be retried without deleting an active host. Only journaled retired credentials are cleaned up.
+
+Do not run multiple Host instances against the same data directory. Older plugin versions must not write the v2 inventory; the inventory backup alone is not a full rollback backup because it contains no credentials. No migration is performed merely by updating this checkout; it happens when the updated plugin writes its configured data.
 
 ## Data files
 
@@ -161,11 +171,11 @@ Default location is `<DSH_HOME>/remote-bash` (`~/.dsh/remote-bash` when `DSH_HOM
 
 ```bash
 npm install
-npm test            # node:test end-to-end suite (five files)
+npm test            # all unit, integration, regression and client tests
 npm run test:mock   # self-test for the mock SSH server (optional)
 ```
 
-The tests start a real SSH server on `127.0.0.1` with `ssh2` and cover authentication, TOFU and host-key rotation, single- and multi-host execution, failure isolation, timeouts, persistent sessions, correct/incorrect sudo passwords, SFTP files and directories, dangerous-command detection, credential handling and the RPC envelope. CI runs the same suite on Node 22 and 24.
+The tests start a real SSH server on `127.0.0.1` with `ssh2` and cover authentication, TOFU and host-key rotation, single- and multi-host execution, failure isolation, timeouts, persistent sessions, correct/incorrect sudo passwords, SFTP files and directories, dangerous-command detection, credential handling and the RPC envelope. CI runs the suite on Node 20 (current maintenance release), 22 and 24. A separate isolated container exercises real OpenSSH and sudo (password, rejected password, cached and NOPASSWD authentication). That test is explicitly skipped during ordinary local runs without its CI fixture. Browser component tests exercise the actual client module but do not replace visual verification.
 
 ## Known limitations
 

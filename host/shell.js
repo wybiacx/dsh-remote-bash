@@ -1,250 +1,179 @@
-/**
- * 持久 shell：复用同一条 SSH channel 上的 bash，cd/export 等状态跨调用保留。
- * 采用唯一 marker 包裹命令并读取退出码；无 PTY，因此没有回显和提示符。
- */
+/** 无 PTY 持久 shell；控制帧一次提交，业务 stdin 与 shell 源码隔离。 */
 import crypto from 'node:crypto'
-import { errorWithCode, truncateBytes } from './util.js'
+import { createByteCollector, errorWithCode, quoteShell, safeUtf8, truncateBytes } from './util.js'
+import { createSudoResponder } from './ssh.js'
 
-const INIT_PREFIX = '__RB_READY_'
-
-export async function openShell(client, { timeoutMs = 20000 } = {}) {
+export async function openShell(client, { timeoutMs = 20000, signal } = {}) {
+  const deadline = Date.now() + timeoutMs
   const channel = await new Promise((resolve, reject) => {
     let settled = false
-    const timer = setTimeout(() => {
-      if (settled) return
+    const finish = (error, stream) => {
+      if (settled) { stream?.destroy?.(); return }
       settled = true
-      reject(errorWithCode('shell-open-timeout', '打开持久 shell 超时。'))
-    }, timeoutMs)
-    try {
-      client.shell((error, stream) => {
-        if (settled) {
-          try {
-            stream?.close?.()
-          } catch {
-            // 已关闭。
-          }
-          return
-        }
-        settled = true
-        clearTimeout(timer)
-        if (error) reject(errorWithCode('shell-open-failed', `打开持久 shell 失败：${error?.message ?? error}`))
-        else resolve(stream)
-      })
-    } catch (error) {
-      if (!settled) {
-        settled = true
-        clearTimeout(timer)
-        reject(errorWithCode('shell-open-failed', `打开持久 shell 失败：${error?.message ?? error}`))
-      }
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve(stream)
     }
+    const onAbort = () => finish(errorWithCode('aborted', '打开持久 shell 已取消。'))
+    const timer = setTimeout(() => finish(errorWithCode('shell-open-timeout', '打开持久 shell 超时。')), timeoutMs)
+    if (signal?.aborted) { onAbort(); return }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    try {
+      client.shell(false, (error, stream) => finish(error ? errorWithCode('shell-open-failed', `打开持久 shell 失败：${error.message}`) : null, stream))
+    } catch (error) { finish(error) }
   })
   const session = new ShellSession(channel)
-  await session.init(timeoutMs)
-  return session
+  try {
+    channel.write('command -v bash >/dev/null 2>&1 && exec bash --noprofile --norc -s || exec sh -s\n')
+    const result = await session.run('true', { timeoutMs: Math.max(1, deadline - Date.now()), signal })
+    if (result.aborted) throw errorWithCode('aborted', '初始化持久 shell 已取消。')
+    if (result.timedOut) throw errorWithCode('shell-open-timeout', '持久 shell 初始化超时。')
+    return session
+  } catch (error) { await session.close(); throw error }
+}
+
+/** 每条流单独识别随机帧；跨包残留仅保留一个 marker 长度，正文直接进入有界 collector。 */
+class FrameReader {
+  constructor(token, collector, complete, fail) {
+    this.begin = Buffer.from(`\x1eRB_B_${token}\x1f`)
+    this.end = Buffer.from(`\x1eRB_E_${token}:`)
+    this.pending = Buffer.alloc(0)
+    this.begun = false
+    this.ended = false
+    this.collector = collector
+    this.complete = complete
+    this.fail = fail
+  }
+  push(chunk) {
+    if (this.ended) return
+    this.pending = Buffer.concat([this.pending, Buffer.from(chunk)])
+    if (!this.begun) {
+      const start = this.pending.indexOf(this.begin)
+      if (start === -1) { this.pending = Buffer.from(this.pending.subarray(-(this.begin.length - 1))); return }
+      this.begun = true
+      this.pending = this.pending.subarray(start + this.begin.length)
+    }
+    const end = this.pending.indexOf(this.end)
+    if (end === -1) {
+      const flush = Math.max(0, this.pending.length - this.end.length + 1)
+      if (flush) this.collector.push(Buffer.from(this.pending.subarray(0, flush)))
+      this.pending = Buffer.from(this.pending.subarray(flush))
+      return
+    }
+    if (end) this.collector.push(Buffer.from(this.pending.subarray(0, end)))
+    this.pending = this.pending.subarray(end)
+    const close = this.pending.indexOf(0x1f, this.end.length)
+    if (close === -1 && this.pending.length <= this.end.length + 4) return
+    const codeText = close === -1 ? '' : this.pending.subarray(this.end.length, close).toString()
+    if (!/^\d{1,3}$/.test(codeText) || Number(codeText) > 255) {
+      this.fail(errorWithCode('shell-protocol', '持久 shell 返回无效控制帧。'))
+      return
+    }
+    this.ended = true
+    this.pending = Buffer.alloc(0)
+    this.complete(Number(codeText))
+  }
 }
 
 class ShellSession {
   constructor(channel) {
     this.channel = channel
     this.alive = true
-    this.decoder = new TextDecoder('utf-8')
-    this.buffer = ''
-    this.stderrChunks = []
     this.active = null
     this.chain = Promise.resolve()
-    this.closeReason = null
-    this.channel.on('data', (chunk) => this.onData(chunk))
-    this.channel.stderr?.on('data', (chunk) => {
-      if (!this.alive) return
-      this.stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-    })
-    this.channel.on('close', () => {
-      this.alive = false
-      this.failActive(errorWithCode('session-lost', '持久会话连接已断开。'))
-    })
-    this.channel.on('error', (error) => {
-      this.alive = false
-      this.failActive(errorWithCode('session-lost', `持久会话出错：${error?.message ?? error}`))
-    })
+    channel.on('data', (chunk) => this.active?.stdoutReader.push(chunk))
+    channel.stderr?.on('data', (chunk) => this.active?.sudoResponder.push(chunk))
+    channel.on('close', () => this.fail(errorWithCode('session-lost', '持久会话连接已断开。')))
+    channel.on('error', () => this.fail(errorWithCode('session-lost', '持久会话连接出错。')))
   }
 
-  onData(chunk) {
-    if (!this.alive) return
-    const text = this.decoder.decode(chunk, { stream: true })
-    if (text) this.buffer += text
-    if (this.readyCheck) this.readyCheck()
-    if (this.active) {
-      const maxBuffer = this.active.maxOutputBytes * 2 + 65536
-      if (this.buffer.length > maxBuffer) {
-        const head = this.buffer.slice(0, this.active.maxOutputBytes + 4096)
-        const tail = this.buffer.slice(-this.active.maxOutputBytes)
-        this.buffer = `${head}\n…[输出过长，已截断]…\n${tail}`
-        this.active.bufferTruncated = true
-      }
-      this.scan()
-    } else if (this.buffer.length > 65536) {
-      // 空闲时不该有输出；保留一小段避免无限增长。
-      this.buffer = this.buffer.slice(-4096)
-    }
-  }
-
-  scan() {
+  fail(error) {
+    this.alive = false
     const active = this.active
-    if (!active) return
-    const beginIndex = this.buffer.indexOf(active.beginMarker)
-    if (beginIndex >= 0) {
-      const outputStart = beginIndex + active.beginMarker.length
-      const endIndex = this.buffer.indexOf(active.endPrefix, outputStart)
-      if (endIndex >= 0) {
-        const codeStart = endIndex + active.endPrefix.length
-        const closeIndex = this.buffer.indexOf('__', codeStart)
-        if (closeIndex >= 0) {
-          const codeText = this.buffer.slice(codeStart, closeIndex)
-          let output = this.buffer.slice(outputStart, endIndex)
-          if (output.startsWith('\n')) output = output.slice(1)
-          if (output.endsWith('\n')) output = output.slice(0, -1)
-          this.buffer = this.buffer.slice(closeIndex + 2)
-          this.completeActive({
-            code: Number.parseInt(codeText, 10),
-            output,
-          })
-          return
-        }
-      }
-    }
+    if (active) { this.active = null; active.cleanup(); active.reject(error) }
+    try { this.channel.destroy?.() } catch { /* already closed */ }
   }
 
-  completeActive(result) {
-    const active = this.active
-    if (!active) return
-    this.active = null
-    clearTimeout(active.timer)
-    const stderr = Buffer.concat(this.stderrChunks)
-    this.stderrChunks = []
-    let output = result.output ?? ''
-    if (stderr.length > 0) {
-      const text = stderr.toString('utf8').replace(/^\uFFFD+/, '').replace(/\uFFFD+$/, '')
-      if (text) output += `${output && !output.endsWith('\n') ? '\n' : ''}[stderr]\n${text}`
-    }
-    const capped = truncateBytes(Buffer.from(output, 'utf8'), active.maxOutputBytes)
-    active.resolve({
-      code: Number.isFinite(result.code) ? result.code : null,
-      output: capped.buffer.toString('utf8'),
-      truncated: active.bufferTruncated || capped.truncated,
-      timedOut: false,
+  run(command, { timeoutMs = 60000, maxOutputBytes = 32768, signal, sudoInput, validate } = {}) {
+    if (!this.alive) return Promise.reject(errorWithCode('session-lost', '持久会话已关闭，请重新执行（会自动重连）。'))
+    if (signal?.aborted) return Promise.reject(errorWithCode('aborted', '执行已取消。'))
+    // 排队取消立即返回，但不关闭别的调用正在使用的通道；轮到它时不再执行。
+    let started = false
+    let onQueuedAbort
+    const cancelled = new Promise((_, reject) => {
+      onQueuedAbort = () => { if (!started) reject(errorWithCode('aborted', '排队执行已取消。')) }
+      signal?.addEventListener('abort', onQueuedAbort, { once: true })
     })
+    const task = this.chain.then(async () => {
+      if (signal?.aborted) throw errorWithCode('aborted', '排队执行已取消。')
+      if (!this.alive) throw errorWithCode('session-lost', '持久会话已关闭。')
+      await validate?.()
+      if (signal?.aborted) throw errorWithCode('aborted', '执行已取消。')
+      if (!this.alive) throw errorWithCode('session-lost', '持久会话已关闭。')
+      signal?.removeEventListener('abort', onQueuedAbort)
+      started = true
+      return this.runOnce(command, { timeoutMs, maxOutputBytes, signal, sudoInput })
+    })
+    this.chain = task.catch(() => {})
+    return Promise.race([task, cancelled]).finally(() => signal?.removeEventListener('abort', onQueuedAbort))
   }
 
-  failActive(error) {
-    const active = this.active
-    if (!active) return
-    this.active = null
-    clearTimeout(active.timer)
-    active.reject(error)
-  }
-
-  waitForReady(marker, timeoutMs) {
+  runOnce(command, { timeoutMs, maxOutputBytes, signal, sudoInput }) {
     return new Promise((resolve, reject) => {
-      let settled = false
-      const timer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        reject(errorWithCode('shell-open-timeout', '持久 shell 初始化超时。'))
-      }, timeoutMs)
+      const token = crypto.randomBytes(24).toString('hex')
+      const stdout = createByteCollector(maxOutputBytes)
+      const stderr = createByteCollector(maxOutputBytes)
+      let outCode = null
+      let errCode = null
+      const finish = ({ timedOut = false, aborted = false } = {}) => {
+        if (this.active !== active) return
+        this.active = null
+        active.cleanup()
+        const out = stdout.finish()
+        const err = stderr.finish()
+        const parts = [out.buffer]
+        if (err.buffer.length) parts.push(Buffer.from('\n[stderr]\n'), err.buffer)
+        const capped = truncateBytes(Buffer.concat(parts), maxOutputBytes)
+        resolve({ code: timedOut || aborted ? null : outCode, output: safeUtf8(capped.buffer), truncated: out.truncated || err.truncated || capped.truncated, timedOut, aborted })
+        if (timedOut || aborted) void this.close()
+      }
       const check = () => {
-        if (settled) return
-        const index = this.buffer.indexOf(marker)
-        if (index < 0) return
-        settled = true
-        clearTimeout(timer)
-        this.buffer = this.buffer.slice(index + marker.length)
-        resolve()
+        if (outCode === null || errCode === null) return
+        if (outCode !== errCode) { this.fail(errorWithCode('shell-protocol', '持久 shell 退出码不一致。')); return }
+        finish()
       }
-      this.readyCheck = check
-      check()
-    })
-  }
-
-  async init(timeoutMs) {
-    const marker = `${INIT_PREFIX}${crypto.randomBytes(8).toString('hex')}__`
-    // 重定向只作用于探测命令：exec 后的 bash 必须继承正常的 stderr，否则会话命令的 stderr 会被丢进 /dev/null。
-    this.channel.write(`command -v bash >/dev/null 2>&1 && exec bash --noprofile --norc -s || exec sh -s\n`)
-    this.channel.write(`printf '${marker}\\n'\n`)
-    await this.waitForReady(marker, timeoutMs)
-    this.readyCheck = null
-    this.buffer = ''
-    this.stderrChunks = []
-  }
-
-  async run(command, { timeoutMs = 60000, maxOutputBytes = 32768 } = {}) {
-    if (!this.alive) throw errorWithCode('session-lost', '持久会话已关闭，请重新执行（会自动重连）。')
-    const task = () => this.runOnce(command, { timeoutMs, maxOutputBytes })
-    const run = this.chain.then(task)
-    this.chain = run.catch(() => {})
-    return run
-  }
-
-  runOnce(command, { timeoutMs, maxOutputBytes }) {
-    return new Promise((resolve, reject) => {
-      const token = crypto.randomBytes(8).toString('hex')
-      this.active = {
-        token,
-        beginMarker: `__RB_B_${token}__`,
-        endPrefix: `__RB_E_${token}:`,
-        maxOutputBytes,
-        bufferTruncated: false,
-        resolve,
-        reject,
-        timer: setTimeout(() => {
-          const active = this.active
-          if (!active) return
-          this.active = null
-          active.resolve({
-            code: null,
-            output: '',
-            truncated: true,
-            timedOut: true,
-          })
-          // 无 PTY 时无法可靠中断远端命令，直接关闭会话避免错位。
-          void this.close()
-        }, timeoutMs),
+      const onAbort = () => finish({ aborted: true })
+      const timer = setTimeout(() => finish({ timedOut: true }), timeoutMs)
+      const active = {
+        resolve, reject,
+        cleanup: () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) },
+        stdoutReader: new FrameReader(token, stdout, (code) => { outCode = code; check() }, (error) => this.fail(error)),
+        stderrReader: new FrameReader(token, stderr, (code) => { errCode = code; check() }, (error) => this.fail(error)),
       }
-      this.buffer = ''
-      this.stderrChunks = []
+      active.sudoResponder = createSudoResponder(sudoInput, (text) => this.channel.write(text), (chunk) => active.stderrReader.push(chunk), (error) => this.fail(error))
+      this.active = active
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) { onAbort(); return }
+      const codeVar = `__rb_code_${token}`
+      // 整个复合语句先被 shell 解析完，sudo 才能开始读取随后的密码输入。
+      // 普通 eval 在当前 shell 中运行，保留 cd/export；其 stdin 为 /dev/null。
       const frame = [
-        `printf '\\n${this.active.beginMarker}\\n'`,
-        command,
-        `printf '\\n${this.active.endPrefix}%s__\\n' "$?"`,
-        '',
+        '{',
+        `printf '\\036RB_B_${token}\\037'`,
+        `printf '\\036RB_B_${token}\\037' >&2`,
+        `if eval ${quoteShell(command)}${sudoInput ? '' : ' </dev/null'}; then ${codeVar}=0; else ${codeVar}=$?; fi`,
+        `printf '\\036RB_E_${token}:%s\\037' "$${codeVar}"`,
+        `printf '\\036RB_E_${token}:%s\\037' "$${codeVar}" >&2`,
+        `unset ${codeVar}`,
+        '}', '',
       ].join('\n')
-      try {
-        this.channel.write(frame)
-      } catch (error) {
-        this.failActive(errorWithCode('session-lost', `写入持久会话失败：${error?.message ?? error}`))
-      }
+      try { this.channel.write(frame) } catch { this.fail(errorWithCode('session-lost', '写入持久会话失败。')) }
     })
   }
 
   async close() {
     if (!this.alive) return
-    this.alive = false
-    this.failActive(errorWithCode('session-closed', '持久会话已关闭。'))
-    try {
-      this.channel.write('exit\n')
-    } catch {
-      // 忽略。
-    }
-    try {
-      this.channel.end()
-    } catch {
-      // 忽略。
-    }
-    setTimeout(() => {
-      try {
-        this.channel.destroy?.()
-      } catch {
-        // 忽略。
-      }
-    }, 200).unref?.()
+    this.fail(errorWithCode('session-closed', '持久会话已关闭。'))
   }
 }

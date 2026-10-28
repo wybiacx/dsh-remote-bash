@@ -2,7 +2,8 @@
  * SSH 连接与操作：TOFU 主机指纹校验、密码/私钥认证、一次命令执行、SFTP 传输。
  * 所有连接都由调用方负责关闭（client.end() / client.destroy()）。
  */
-import { readFile, readdir, stat, mkdir, rm } from 'node:fs/promises'
+import { readFile, readdir, lstat, mkdir, rm, mkdtemp, rename, realpath } from 'node:fs/promises'
+import crypto from 'node:crypto'
 import path from 'node:path'
 import ssh2 from 'ssh2'
 import { expandHome } from './paths.js'
@@ -54,30 +55,7 @@ async function loadKeyOptions(host, secret) {
 async function verifyHostKey(knownHosts, host, hostKey) {
   const fingerprint = fingerprintOf(hostKey)
   const keyType = keyTypeOf(hostKey)
-  const existing = await knownHosts.find(host.host, host.port)
-  if (!existing) {
-    await knownHosts.record({ host: host.host, port: host.port, keyType, fingerprint })
-    return { fingerprint, keyType, status: 'new' }
-  }
-  if (existing.fingerprint === fingerprint) {
-    try {
-      await knownHosts.record({ host: host.host, port: host.port, keyType, fingerprint })
-    } catch {
-      // 刷新 lastSeenAt 失败不影响连接。
-    }
-    return { fingerprint, keyType, status: 'known' }
-  }
-  throw errorWithCode(
-    'host-key-changed',
-    `主机 ${host.host}:${host.port} 的 SSH 指纹与已记录不一致，已拒绝连接。请确认新指纹后在 Remote Bash 设置页重新信任。`,
-    {
-      host: host.host,
-      port: host.port,
-      fingerprint,
-      keyType,
-      previousFingerprint: existing.fingerprint,
-    },
-  )
+  return knownHosts.verify({ host: host.host, port: host.port, keyType, fingerprint })
 }
 
 /** cwd 的 shell 写法：~ 与 $HOME 需要在远端由 shell 展开，不能整体单引号。 */
@@ -89,46 +67,72 @@ function cdTarget(cwd) {
   return quoteShell(value)
 }
 
-/** 构造 sudo 安全 heredoc 与可选 cwd 包装。密码不会进 argv / ps。 */
+/** 密码只保存在 sudoInput；收到随机 sudo 提示后才经 channel stdin 发送。 */
 export function buildCommand({ command, cwd, sudo, sudoPassword }) {
   let core = String(command ?? '')
+  let sudoInput
   if (sudo) {
     const password = typeof sudoPassword === 'string' ? sudoPassword : ''
-    if (!password) {
-      throw errorWithCode('sudo-password-missing', 'sudo 执行需要在设置页配置 sudo 密码（或登录密码）。')
-    }
-    if (password.includes('\n') || password.includes('\r')) {
-      throw errorWithCode('invalid-secret', 'sudo 密码不能包含换行。')
-    }
-    let delimiter = `__RB_SUDO_${Math.random().toString(16).slice(2, 10)}__`
-    while (password.includes(delimiter)) delimiter = `__RB_SUDO_${Math.random().toString(16).slice(2, 10)}__`
-    core = `sudo -S -p '' -- bash -lc ${quoteShell(core)} <<'${delimiter}'\n${password}\n${delimiter}`
+    if (/[\r\n\0]/.test(password)) throw errorWithCode('invalid-secret', 'sudo 密码不能包含换行或 NUL。')
+    const prompt = `__RB_SUDO_${crypto.randomBytes(24).toString('hex')}__`
+    sudoInput = { prompt, password }
+    // 非登录 bash -c 避免 profile 在 exec 重定向前读取认证 stdin；不自动加载登录配置。
+    // 即便 sudo 的凭据缓存/NOPASSWD 跳过认证，业务命令也不会读到认证输入。
+    core = `sudo -S -p ${quoteShell(prompt)} -- bash -c ${quoteShell(`exec </dev/null\n${core}`)}`
   }
   const remoteCommand = cwd ? `cd ${cdTarget(cwd)} && (\n${core}\n)` : core
-  return { remoteCommand }
+  return sudoInput ? { remoteCommand, sudoInput } : { remoteCommand }
+}
+
+/** 过滤可跨包的 sudo 提示；最多发送一次密码，绝不将其写进 shell 源码。 */
+export function createSudoResponder(input, send, emit, fail) {
+  const token = input ? Buffer.from(input.prompt) : null
+  let pending = Buffer.alloc(0)
+  let sent = false
+  return {
+    push(chunk) {
+      if (!token) { emit(chunk); return }
+      pending = Buffer.concat([pending, Buffer.from(chunk)])
+      let index
+      while ((index = pending.indexOf(token)) !== -1) {
+        if (index) emit(pending.subarray(0, index))
+        pending = pending.subarray(index + token.length)
+        if (sent) { fail(errorWithCode('sudo-auth-failed', 'sudo 密码认证失败。')); return }
+        if (!input.password) { fail(errorWithCode('sudo-password-missing', 'sudo 请求认证，但未配置 sudo 密码（或登录密码）。')); return }
+        sent = true
+        try { send(`${input.password}\n`) } catch { fail(errorWithCode('session-lost', '无法发送 sudo 认证输入。')); return }
+      }
+      // 只保留可能属于跨包提示的后缀，普通输出立即进入有界收集器。
+      let keep = Math.min(token.length - 1, pending.length)
+      while (keep && !pending.subarray(pending.length - keep).equals(token.subarray(0, keep))) keep -= 1
+      if (pending.length > keep) emit(pending.subarray(0, pending.length - keep))
+      pending = Buffer.from(pending.subarray(pending.length - keep))
+    },
+    finish() { if (pending.length) emit(pending); pending = Buffer.alloc(0) },
+  }
 }
 
 /**
  * 在已连接 client 上执行一条命令（一次性 channel）。
  * 返回 { code, signal, output, truncated, timedOut, aborted }。
  */
-export function execChannel(client, { command, timeoutMs = 60000, signal, maxOutputBytes = 32768 } = {}) {
+export function execChannel(client, { command, sudoInput, timeoutMs = 60000, signal, maxOutputBytes = 32768 } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false
     let timedOut = false
     let aborted = false
     let stream = null
-    let fallbackTimer = null
+    let responder
     const stdout = createByteCollector(maxOutputBytes)
     const stderr = createByteCollector(maxOutputBytes)
 
     const cleanup = () => {
       clearTimeout(timer)
-      clearTimeout(fallbackTimer)
       if (signal) signal.removeEventListener?.('abort', onAbort)
     }
 
     const buildResult = (exitCode, exitSignal) => {
+      responder?.finish()
       const out = stdout.finish()
       const err = stderr.finish()
       const parts = [out.buffer]
@@ -153,6 +157,7 @@ export function execChannel(client, { command, timeoutMs = 60000, signal, maxOut
 
     const onAbort = () => {
       aborted = true
+      try { stream?.signal?.('TERM') } catch { /* server may not support signals */ }
       closeStream()
       settle()
     }
@@ -173,12 +178,12 @@ export function execChannel(client, { command, timeoutMs = 60000, signal, maxOut
         // 某些服务端不支持 channel signal，直接关闭。
       }
       closeStream()
-      fallbackTimer = setTimeout(() => settle(), 500)
+      settle()
     }, timeoutMs)
 
     if (signal) {
       if (signal.aborted) {
-        settle()
+        onAbort()
         return
       }
       signal.addEventListener?.('abort', onAbort, { once: true })
@@ -186,7 +191,7 @@ export function execChannel(client, { command, timeoutMs = 60000, signal, maxOut
 
     try {
       client.exec(command, (error, channel) => {
-        if (settled) return
+        if (settled) { channel?.destroy?.(); return }
         if (error) {
           settled = true
           cleanup()
@@ -196,8 +201,15 @@ export function execChannel(client, { command, timeoutMs = 60000, signal, maxOut
         stream = channel
         let exitCode = null
         let exitSignal = null
-        channel.on('data', (chunk) => stdout.push(chunk))
-        channel.stderr?.on('data', (chunk) => stderr.push(chunk))
+        responder = createSudoResponder(sudoInput, (text) => channel.write(text), (chunk) => stderr.push(chunk), (error) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          channel.destroy?.()
+          reject(error)
+        })
+        channel.on('data', (chunk) => { if (!settled) stdout.push(chunk) })
+        channel.stderr?.on('data', (chunk) => { if (!settled) responder.push(chunk) })
         channel.on('exit', (code, signalName) => {
           exitCode = typeof code === 'number' ? code : null
           exitSignal = signalName ?? null
@@ -209,9 +221,9 @@ export function execChannel(client, { command, timeoutMs = 60000, signal, maxOut
           cleanup()
           reject(errorWithCode('exec-failed', `远程命令执行出错：${channelError?.message ?? channelError}`))
         })
-        // 命令不读取客户端 stdin：立即半关闭，避免远端命令挂起等待输入。
+        // 普通命令立即 EOF；sudo 仅在提示出现时写认证输入，其子命令自行隔离 stdin。
         try {
-          channel.end?.()
+          if (!sudoInput) channel.end?.()
         } catch {
           // 忽略。
         }
@@ -242,6 +254,7 @@ export function createSshClient({ knownHosts, logger = console }) {
       authOptions = { password }
     }
 
+    if (signal?.aborted) throw errorWithCode('aborted', '连接已取消。')
     const client = new ssh2.Client()
     return await new Promise((resolve, reject) => {
       let settled = false
@@ -327,256 +340,260 @@ export function createSshClient({ knownHosts, logger = console }) {
   return { connect, exec: execChannel }
 }
 
-/** 读取远端 $HOME。 */
-export async function remoteHome(client) {
-  const result = await execChannel(client, {
-    command: 'printf %s "$HOME"',
-    timeoutMs: 10000,
-    maxOutputBytes: 4096,
-  })
+/** 读取远端 $HOME，接受调用方传入的共享 deadline。 */
+export async function remoteHome(client, { timeoutMs = 10000, deadline = Date.now() + timeoutMs, signal } = {}) {
+  if (deadline <= Date.now()) throw errorWithCode('timeout', '传输超时。')
+  const result = await execChannel(client, { command: 'printf %s "$HOME"', timeoutMs: Math.max(1, deadline - Date.now()), signal, maxOutputBytes: 4096 })
+  if (result.aborted) throw errorWithCode('aborted', '传输已取消。')
+  if (result.timedOut) throw errorWithCode('timeout', '读取远端 HOME 超时。')
   const home = result.output.trim()
-  if (!home) throw errorWithCode('remote-home-failed', '无法读取远端 $HOME。')
+  if (result.code !== 0 || !home) throw errorWithCode('remote-home-failed', '无法读取远端 $HOME。')
   return home
 }
 
-/** 展开远端路径里的 ~ / $HOME。 */
 export function expandRemotePath(target, home) {
   if (typeof target !== 'string' || !target) return target
-  if (target === '~') return home
+  if (target === '~' || target === '$HOME') return home
   if (target.startsWith('~/')) return `${home}${target.slice(1)}`
-  if (target.startsWith('$HOME')) return `${home}${target.slice(5)}`
+  if (target.startsWith('$HOME/')) return `${home}${target.slice(5)}`
   return target
 }
 
-/** 远端路径元信息（文件/目录 + 大小），不存在返回 null。 */
-export async function remoteStat(client, target) {
-  const sftp = await openSftp(client)
+/** 每次传输的所有阶段共用一个 deadline；取消立即销毁 SFTP 通道。 */
+function transferScope({ timeoutMs = 300000, deadline = Date.now() + timeoutMs, signal } = {}) {
+  let failure = null
+  let sftp = null
+  let rejectFailure
+  const failed = new Promise((_, reject) => { rejectFailure = reject })
+  failed.catch(() => {})
+  const stop = () => {
+    try { if (sftp?.destroy) sftp.destroy(); else sftp?.end?.() } catch { /* closed */ }
+  }
+  const abort = (error) => { if (!failure) { failure = error; stop(); rejectFailure(error) } }
+  const onAbort = () => abort(errorWithCode('aborted', '传输已取消。'))
+  const onError = (error) => abort(errorWithCode('sftp-failed', `SFTP 通道失败：${error.message}`))
+  const timer = setTimeout(() => abort(errorWithCode('timeout', '传输超时。')), Math.max(0, deadline - Date.now()))
+  signal?.addEventListener('abort', onAbort, { once: true })
+  if (signal?.aborted) onAbort()
+  const scope = {
+    check() {
+      if (!failure && Date.now() >= deadline) abort(errorWithCode('timeout', '传输超时。'))
+      if (failure) throw failure
+    },
+    async run(operation) {
+      scope.check()
+      return Promise.race([Promise.resolve().then(() => { scope.check(); return operation() }), failed])
+    },
+    attach(value) {
+      sftp = value
+      sftp.on?.('error', onError)
+      if (failure) stop()
+      scope.check()
+    },
+    close() {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      // 保留 error handler 直到通道实际关闭，以消费迟到的错误事件。
+      stop()
+    },
+  }
+  return scope
+}
+
+async function openSftp(client, scope) {
+  return scope.run(() => new Promise((resolve, reject) => {
+    client.sftp((error, sftp) => {
+      if (error) { reject(errorWithCode('sftp-failed', `建立 SFTP 通道失败：${error.message}`)); return }
+      try { scope.attach(sftp); resolve(sftp) } catch (error) { reject(error) }
+    })
+  }))
+}
+
+function sftpCall(scope, sftp, method, ...args) {
+  return scope.run(() => new Promise((resolve, reject) => {
+    sftp[method](...args, (error, value) => error ? reject(error) : resolve(value))
+  }))
+}
+
+async function remoteLstat(scope, sftp, target) {
+  try { return await sftpCall(scope, sftp, 'lstat', target) } catch (error) {
+    if (error.code === 2) return null
+    throw error
+  }
+}
+
+function noLink(stats, target) {
+  if (stats?.isSymbolicLink?.()) throw errorWithCode('unsafe-path', `拒绝传输符号链接：${target}`)
+}
+
+export async function remoteStat(client, target, options = {}) {
+  const scope = transferScope(options)
   try {
-    const stats = await sftpStat(sftp, target)
+    const sftp = await openSftp(client, scope)
+    const stats = await remoteLstat(scope, sftp, target)
     if (!stats) return null
+    noLink(stats, target)
     return { isDirectory: stats.isDirectory(), isFile: stats.isFile(), size: Number(stats.size) || 0 }
+  } finally { scope.close() }
+}
+
+async function sftpMkdirp(scope, sftp, dir) {
+  if (!dir || dir === '.' || dir === '/') return
+  let stats = await remoteLstat(scope, sftp, dir)
+  if (!stats) {
+    await sftpMkdirp(scope, sftp, path.posix.dirname(dir))
+    try { await sftpCall(scope, sftp, 'mkdir', dir) } catch (error) {
+      // 仅允许确实已被并发创建的目录；权限错误不能被静默忽略。
+      stats = await remoteLstat(scope, sftp, dir)
+      if (!stats) throw error
+    }
+    stats ??= await remoteLstat(scope, sftp, dir)
+  }
+  noLink(stats, dir)
+  if (!stats?.isDirectory()) throw errorWithCode('invalid-path', `远端路径不是目录：${dir}`)
+}
+
+async function localLstat(scope, target) {
+  try { return await scope.run(() => lstat(target)) } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+function safeName(name) {
+  if (typeof name !== 'string' || !name || name === '.' || name === '..' || /[\\/\0]/.test(name) || path.win32.isAbsolute(name) || /^[A-Za-z]:/.test(name)) {
+    throw errorWithCode('unsafe-path', '远端返回了不安全的文件名。')
+  }
+  return name
+}
+
+function inside(root, target) {
+  const relative = path.relative(root, target)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw errorWithCode('unsafe-path', '下载路径超出目标目录。')
+}
+
+async function ensureDirectory(scope, target) {
+  let stats = await localLstat(scope, target)
+  noLink(stats, target)
+  if (!stats) {
+    await scope.run(() => mkdir(target, { recursive: true, mode: 0o700 }))
+    stats = await localLstat(scope, target)
+  }
+  noLink(stats, target)
+  if (!stats?.isDirectory()) throw errorWithCode('invalid-path', `本地路径不是目录：${target}`)
+  return scope.run(() => realpath(target))
+}
+
+/** 每个文件下载到同目录私有临时目录，完成后原子替换；失败不截断旧文件。 */
+async function atomicGet(scope, sftp, remote, target, root) {
+  inside(root, target)
+  const parent = path.dirname(target)
+  const canonicalParent = await scope.run(() => realpath(parent))
+  inside(root, canonicalParent)
+  if (canonicalParent !== parent) throw errorWithCode('unsafe-path', '下载目标目录包含符号链接。')
+  const old = await localLstat(scope, target)
+  noLink(old, target)
+  if (old && !old.isFile()) throw errorWithCode('invalid-path', '下载目标不是普通文件。')
+  // mkdtemp 必须等待完成后才能清理，避免 timeout race 留下迟到创建的临时目录。
+  scope.check()
+  const staging = await mkdtemp(path.join(parent, '.rb-download-'))
+  const temporary = path.join(staging, 'content')
+  try {
+    scope.check()
+    await sftpCall(scope, sftp, 'fastGet', remote, temporary, { concurrency: 16 })
+    const current = await localLstat(scope, target)
+    noLink(current, target)
+    if (current && !current.isFile()) throw errorWithCode('invalid-path', '下载目标不是普通文件。')
+    const checkedParent = await scope.run(() => realpath(parent))
+    if (checkedParent !== canonicalParent) throw errorWithCode('unsafe-path', '下载目录在传输期间发生变化。')
+    scope.check()
+    // 来源由 mkdtemp 创建且名称固定；目标已检查根约束、链接和类型。
+    await rename(temporary, target)
   } finally {
-    try {
-      sftp.end?.()
-    } catch {
-      // 已关闭。
-    }
+    const absolute = path.resolve(staging)
+    if (path.dirname(absolute) !== parent || !path.basename(absolute).startsWith('.rb-download-')) throw errorWithCode('unsafe-path', '临时目录校验失败。')
+    await rm(absolute, { recursive: true, force: true })
   }
 }
 
-function timeoutError(message = '传输超时。') {
-  return errorWithCode('timeout', message)
-}
-
-function openSftp(client, { timeoutMs = 15000, signal } = {}) {
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      reject(timeoutError('建立 SFTP 通道超时。'))
-    }, timeoutMs)
-    const onAbort = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      reject(errorWithCode('aborted', '传输已取消。'))
-    }
-    if (signal) {
-      if (signal.aborted) {
-        clearTimeout(timer)
-        reject(errorWithCode('aborted', '传输已取消。'))
-        return
-      }
-      signal.addEventListener?.('abort', onAbort, { once: true })
-    }
-    try {
-      client.sftp((error, sftp) => {
-        if (settled) {
-          try {
-            sftp?.end?.()
-          } catch {
-            // 已关闭。
-          }
-          return
-        }
-        settled = true
-        clearTimeout(timer)
-        if (signal) signal.removeEventListener?.('abort', onAbort)
-        if (error) reject(errorWithCode('sftp-failed', `建立 SFTP 通道失败：${error?.message ?? error}`))
-        else resolve(sftp)
-      })
-    } catch (error) {
-      if (!settled) {
-        settled = true
-        clearTimeout(timer)
-        reject(errorWithCode('sftp-failed', `建立 SFTP 通道失败：${error?.message ?? error}`))
-      }
-    }
-  })
-}
-
-function sftpMkdirp(sftp, dir) {
-  if (!dir || dir === '.' || dir === '/') return Promise.resolve()
-  const isAbsolute = dir.startsWith('/')
-  const parts = dir.split('/').filter(Boolean)
-  let current = isAbsolute ? '/' : ''
-  return parts.reduce(
-    (previous, part) => previous.then(() => new Promise((resolve) => {
-      current = current === '/' ? `/${part}` : current ? `${current}/${part}` : part
-      sftp.mkdir(current, () => resolve())
-    })),
-    Promise.resolve(),
-  )
-}
-
-function sftpStat(sftp, target) {
-  return new Promise((resolve, reject) => {
-    sftp.stat(target, (error, stats) => {
-      if (error) {
-        if (error.code === 2) return resolve(null)
-        return reject(errorWithCode('sftp-failed', `读取远端路径失败：${target}（${error.message}）`))
-      }
-      resolve(stats)
-    })
-  })
-}
-
-function sftpReaddir(sftp, target) {
-  return new Promise((resolve, reject) => {
-    sftp.readdir(target, (error, entries) => {
-      if (error) return reject(errorWithCode('sftp-failed', `读取远端目录失败：${target}（${error.message}）`))
-      resolve(entries ?? [])
-    })
-  })
-}
-
-function fastPut(sftp, local, remote, deadline) {
-  return new Promise((resolve, reject) => {
-    const remaining = deadline - Date.now()
-    if (remaining <= 0) return reject(timeoutError())
-    const timer = setTimeout(() => reject(timeoutError()), remaining)
-    sftp.fastPut(local, remote, { concurrency: 16 }, (error) => {
-      clearTimeout(timer)
-      if (error) reject(errorWithCode('sftp-failed', `上传失败：${local} -> ${remote}（${error.message}）`))
-      else resolve()
-    })
-  })
-}
-
-function fastGet(sftp, remote, local, deadline) {
-  return new Promise((resolve, reject) => {
-    const remaining = deadline - Date.now()
-    if (remaining <= 0) return reject(timeoutError())
-    const timer = setTimeout(() => reject(timeoutError()), remaining)
-    sftp.fastGet(remote, local, { concurrency: 16 }, (error) => {
-      clearTimeout(timer)
-      if (error) reject(errorWithCode('sftp-failed', `下载失败：${remote} -> ${local}（${error.message}）`))
-      else resolve()
-    })
-  })
-}
-
-async function walkLocal(root, { signal } = {}) {
-  const entries = []
-  async function visit(dir, prefix) {
-    if (signal?.aborted) throw errorWithCode('aborted', '传输已取消。')
-    const items = await readdir(dir, { withFileTypes: true })
-    for (const item of items) {
-      const absolute = path.join(dir, item.name)
-      const relative = prefix ? `${prefix}/${item.name}` : item.name
-      if (item.isDirectory()) {
-        entries.push({ absolute, relative, directory: true })
-        await visit(absolute, relative)
-      } else if (item.isFile()) {
-        const stats = await stat(absolute)
-        entries.push({ absolute, relative, directory: false, size: stats.size })
-      }
-    }
-  }
-  await visit(root, '')
-  return entries
-}
-
-/** 上传本地文件/目录到远端。 */
-export async function upload({ client, localPath, remotePath, timeoutMs = 300000, signal } = {}) {
-  const deadline = Date.now() + timeoutMs
-  let localStats
+export async function upload({ client, localPath, remotePath, timeoutMs = 300000, deadline = Date.now() + timeoutMs, signal } = {}) {
+  const scope = transferScope({ deadline, signal })
   try {
-    localStats = await stat(localPath)
-  } catch {
-    throw errorWithCode('local-not-found', `本地路径不存在：${localPath}`)
-  }
-  const sftp = await openSftp(client, { signal })
-  let bytes = 0
-  try {
-    if (localStats.isDirectory()) {
-      await sftpMkdirp(sftp, remotePath)
-      for (const entry of await walkLocal(localPath, { signal })) {
-        if (signal?.aborted) throw errorWithCode('aborted', '传输已取消。')
-        const target = path.posix.join(remotePath, entry.relative)
-        if (entry.directory) await sftpMkdirp(sftp, target)
-        else {
-          await fastPut(sftp, entry.absolute, target, deadline)
-          bytes += entry.size ?? 0
+    const rootStats = await localLstat(scope, localPath)
+    if (!rootStats) throw errorWithCode('local-not-found', `本地路径不存在：${localPath}`)
+    noLink(rootStats, localPath)
+    const sftp = await openSftp(client, scope)
+    let bytes = 0
+    const put = async (source, target, stats) => {
+      noLink(stats, source)
+      if (!stats?.isFile()) throw errorWithCode('invalid-path', `本地路径不是普通文件：${source}`)
+      noLink(await remoteLstat(scope, sftp, target), target)
+      await sftpCall(scope, sftp, 'fastPut', source, target, { concurrency: 16 })
+      bytes += stats.size
+    }
+    const visit = async (source, target, stats) => {
+      noLink(stats, source)
+      if (stats.isDirectory()) {
+        await sftpMkdirp(scope, sftp, target)
+        for (const entry of await scope.run(() => readdir(source, { withFileTypes: true }))) {
+          const child = path.join(source, safeName(entry.name))
+          await visit(child, path.posix.join(target, entry.name), await localLstat(scope, child))
         }
-      }
-    } else {
-      const destination = remotePath.endsWith('/')
-        ? path.posix.join(remotePath, path.basename(localPath))
-        : remotePath
-      await sftpMkdirp(sftp, path.posix.dirname(destination))
-      await fastPut(sftp, localPath, destination, deadline)
-      bytes = localStats.size
+      } else { await put(source, target, stats) }
+    }
+    if (rootStats.isDirectory()) await visit(localPath, remotePath, rootStats)
+    else {
+      const target = remotePath.endsWith('/') ? path.posix.join(remotePath, path.basename(localPath)) : remotePath
+      await sftpMkdirp(scope, sftp, path.posix.dirname(target))
+      await put(localPath, target, rootStats)
     }
     return { bytes }
-  } finally {
-    try {
-      sftp.end?.()
-    } catch {
-      // 已关闭。
-    }
-  }
+  } finally { scope.close() }
 }
 
-/** 从远端下载文件/目录到本地。 */
-export async function download({ client, remotePath, localPath, timeoutMs = 300000, signal } = {}) {
-  const deadline = Date.now() + timeoutMs
-  const sftp = await openSftp(client, { signal })
-  let bytes = 0
+export async function download({ client, remotePath, localPath, timeoutMs = 300000, deadline = Date.now() + timeoutMs, signal } = {}) {
+  const scope = transferScope({ deadline, signal })
   try {
-    const rootStats = await sftpStat(sftp, remotePath)
-    if (!rootStats) throw errorWithCode('remote-not-found', `远端路径不存在：${remotePath}`)
-    if (rootStats.isDirectory()) {
-      await mkdir(localPath, { recursive: true })
+    const sftp = await openSftp(client, scope)
+    const stats = await remoteLstat(scope, sftp, remotePath)
+    if (!stats) throw errorWithCode('remote-not-found', `远端路径不存在：${remotePath}`)
+    noLink(stats, remotePath)
+    let bytes = 0
+    if (stats.isDirectory()) {
+      const root = await ensureDirectory(scope, path.resolve(localPath))
       const visit = async (remoteDir, localDir) => {
-        if (signal?.aborted) throw errorWithCode('aborted', '传输已取消。')
-        const entries = await sftpReaddir(sftp, remoteDir)
-        for (const entry of entries) {
+        inside(root, localDir)
+        const entries = await sftpCall(scope, sftp, 'readdir', remoteDir)
+        for (const entry of entries ?? []) {
           if (entry.filename === '.' || entry.filename === '..') continue
-          const remoteChild = path.posix.join(remoteDir, entry.filename)
-          const localChild = path.join(localDir, entry.filename)
-          if (entry.attrs?.isDirectory?.()) {
-            await mkdir(localChild, { recursive: true })
-            await visit(remoteChild, localChild)
-          } else if (entry.attrs?.isFile?.()) {
-            await fastGet(sftp, remoteChild, localChild, deadline)
-            bytes += Number(entry.attrs.size) || 0
-          }
+          const name = safeName(entry.filename)
+          const remoteChild = path.posix.join(remoteDir, name)
+          const localChild = path.join(localDir, name)
+          inside(root, localChild)
+          // 不信任目录列表中的 attrs；传输前重新 lstat，并拒绝链接/特殊文件。
+          const child = await remoteLstat(scope, sftp, remoteChild)
+          if (!child) throw errorWithCode('remote-not-found', `远端路径不存在：${remoteChild}`)
+          noLink(child, remoteChild)
+          if (child.isDirectory()) {
+            const canonical = await ensureDirectory(scope, localChild)
+            inside(root, canonical)
+            if (canonical !== localChild) throw errorWithCode('unsafe-path', '下载目录包含符号链接。')
+            await visit(remoteChild, canonical)
+          } else if (child.isFile()) {
+            await atomicGet(scope, sftp, remoteChild, localChild, root)
+            bytes += Number(child.size) || 0
+          } else { throw errorWithCode('unsafe-path', '拒绝下载特殊文件。') }
         }
       }
-      await visit(remotePath, localPath)
-    } else {
-      await mkdir(path.dirname(localPath), { recursive: true })
-      await fastGet(sftp, remotePath, localPath, deadline)
-      bytes = Number(rootStats.size) || 0
-    }
+      await visit(remotePath, root)
+    } else if (stats.isFile()) {
+      const destination = path.resolve(localPath)
+      noLink(await localLstat(scope, destination), destination)
+      // 调用方明确选择的父路径可含操作系统别名（如 macOS /var）；先规范化，随后固定此根。
+      const root = await ensureDirectory(scope, path.dirname(destination))
+      await atomicGet(scope, sftp, remotePath, path.join(root, path.basename(destination)), root)
+      bytes = Number(stats.size) || 0
+    } else { throw errorWithCode('unsafe-path', '拒绝下载特殊文件。') }
     return { bytes }
-  } finally {
-    try {
-      sftp.end?.()
-    } catch {
-      // 已关闭。
-    }
-  }
+  } finally { scope.close() }
 }
