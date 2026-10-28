@@ -40,7 +40,10 @@
     "icon.svg",
     "README.md",
     "LICENSE",
-    "docs/**"
+    "docs/**",
+    "README.en.md",
+    "SECURITY.md",
+    "SECURITY.en.md"
   ],
   "scripts": {
     "test": "node --test tests/unit.test.mjs tests/ssh.test.mjs tests/service.test.mjs tests/tools.test.mjs tests/rpc.test.mjs",

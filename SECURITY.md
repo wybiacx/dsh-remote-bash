@@ -1,5 +1,7 @@
 # 安全策略
 
+**简体中文** · [English](SECURITY.en.md)
+
 这个插件会接触 SSH 凭据（密码、私钥、sudo 密码），安全问题请优先私下报告，不要直接开公开 issue：
 
 - 通过 GitHub 的 [Private vulnerability reporting](https://github.com/wybiacx/dsh-remote-bash/security/advisories/new) 提交；

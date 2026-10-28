@@ -3,7 +3,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/wybiacx/dsh-remote-bash/actions/workflows/ci.yml"><img src="https://github.com/wybiacx/dsh-remote-bash/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <b>简体中文</b> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/wybiacx/dsh-remote-bash/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/wybiacx/dsh-remote-bash/ci.yml?branch=main&label=CI&logo=github" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT">
   <img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node >= 20">
 </p>
