@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Remote Bash",
+    "description": "Run commands on one or many remote Linux/macOS hosts over SSH, with per-host accounts, TOFU host-key checks, dangerous-command approval, persistent shells and SFTP transfer."
+  }
+}

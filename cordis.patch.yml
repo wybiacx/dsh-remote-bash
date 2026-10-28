@@ -1,0 +1,17 @@
+# Remote Bash bundle patch.
+# `remote-bash` is the Host half (index.js -> host/plugin.js); it registers the
+# remote_bash / remote_hosts / remote_upload / remote_download / remote_sessions
+# tools and the browser RPC channel that backs the Settings page in client.js.
+- insert:
+    - id: remote-bash
+      name: 'dsh-remote-bash'
+      config:
+        # '' => <DSH_HOME or ~/.dsh>/remote-bash
+        dataDir: ''
+        defaultTimeoutSec: 60
+        maxParallelHosts: 8
+        maxOutputBytes: 32768
+        sessionIdleMinutes: 30
+        # dangerous | always | trusted
+        approvalMode: dangerous
+        extraDangerousPatterns: []

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "远程命令",
+    "description": "通过 SSH 在单台或多台远程 Linux/macOS 主机上执行命令：逐机账户密码/私钥、主机指纹 TOFU、危险命令审批、持久 shell 与 SFTP 传输。"
+  }
+}

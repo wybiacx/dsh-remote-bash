@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="rb-settings-title rb-settings-desc">
+  <title id="rb-settings-title">Remote Bash 设置页示意</title>
+  <desc id="rb-settings-desc">DSH 设置里的远程命令页面：主机列表、凭据状态、测试连接、已知主机与持久会话。</desc>
+  <defs>
+    <linearGradient id="st-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef1f7"/>
+      <stop offset="1" stop-color="#e6eaf2"/>
+    </linearGradient>
+    <filter id="st-shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#1e293b" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="1100" height="640" fill="url(#st-bg)"/>
+  <g font-family="SF Pro Text, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+    <!-- 窗口 -->
+    <rect x="40" y="40" width="1020" height="560" rx="16" fill="#ffffff" stroke="#dde3ec" stroke-width="1" filter="url(#st-shadow)"/>
+    <!-- 标题栏 -->
+    <rect x="40" y="40" width="1020" height="52" rx="16" fill="#fbfcfe"/>
+    <rect x="40" y="76" width="1020" height="16" fill="#fbfcfe"/>
+    <line x1="40" y1="92" x2="1060" y2="92" stroke="#e8edf4" stroke-width="1"/>
+    <circle cx="68" cy="66" r="5.5" fill="#f87171"/>
+    <circle cx="88" cy="66" r="5.5" fill="#fbbf24"/>
+    <circle cx="108" cy="66" r="5.5" fill="#34d399"/>
+    <text x="550" y="71" text-anchor="middle" font-size="13" fill="#64748b">DSH · 设置</text>
+
+    <!-- 侧栏 -->
+    <rect x="41" y="93" width="220" height="506" fill="#fbfcfe"/>
+    <line x1="261" y1="93" x2="261" y2="599" stroke="#edf1f7" stroke-width="1"/>
+    <g font-size="13.5" fill="#475569">
+      <text x="72" y="140">账户</text>
+      <text x="72" y="182">常规</text>
+      <text x="72" y="224">模型</text>
+      <text x="72" y="266">插件</text>
+      <text x="72" y="308">Agent 预设</text>
+    </g>
+    <rect x="56" y="330" width="188" height="38" rx="9" fill="#e8f0fe"/>
+    <text x="72" y="355" font-size="13.5" font-weight="600" fill="#2563eb">远程命令</text>
+    <circle cx="76" cy="140" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="182" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="224" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="266" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="308" r="2" fill="#cbd5e1"/>
+
+    <!-- 主标题 -->
+    <text x="292" y="140" font-size="24" font-weight="700" fill="#0f172a">远程命令</text>
+    <text x="292" y="166" font-size="13" fill="#7c8798">管理可以执行远程命令的主机、凭据与主机指纹</text>
+
+    <!-- 操作按钮 -->
+    <rect x="812" y="122" width="88" height="32" rx="8" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="856" y="143" text-anchor="middle" font-size="13" fill="#475569">刷新</text>
+    <rect x="912" y="122" width="118" height="32" rx="8" fill="#2563eb"/>
+    <text x="971" y="143" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">+ 添加主机</text>
+
+    <!-- Tabs -->
+    <line x1="292" y1="196" x2="1030" y2="196" stroke="#edf1f7" stroke-width="1"/>
+    <text x="292" y="188" font-size="13.5" font-weight="600" fill="#2563eb">主机</text>
+    <text x="330" y="188" font-size="12" fill="#94a3b8">2</text>
+    <rect x="288" y="195" width="44" height="2.5" rx="1.2" fill="#2563eb"/>
+    <text x="360" y="188" font-size="13.5" fill="#7c8798">已知主机</text>
+    <text x="422" y="188" font-size="12" fill="#b6c0cd">1</text>
+    <text x="458" y="188" font-size="13.5" fill="#7c8798">会话</text>
+    <text x="492" y="188" font-size="12" fill="#b6c0cd">0</text>
+
+    <!-- 主机卡片 -->
+    <rect x="292" y="216" width="738" height="272" rx="12" fill="#ffffff" stroke="#e6ebf3" stroke-width="1"/>
+    <!-- 行 1 -->
+    <circle cx="326" cy="252" r="16" fill="#eef4ff"/>
+    <text x="326" y="257" text-anchor="middle" font-size="13" font-weight="700" fill="#2563eb">W</text>
+    <text x="356" y="248" font-size="14" font-weight="600" fill="#0f172a">web-1</text>
+    <text x="356" y="268" font-size="12" fill="#8592a5">deploy@10.0.0.5:22</text>
+    <rect x="500" y="238" width="46" height="22" rx="11" fill="#eef4ff"/>
+    <text x="523" y="253" text-anchor="middle" font-size="11.5" fill="#2563eb">密码</text>
+    <rect x="554" y="238" width="44" height="22" rx="11" fill="#f1f5f9"/>
+    <text x="576" y="253" text-anchor="middle" font-size="11.5" fill="#64748b">web</text>
+    <circle cx="616" cy="249" r="3" fill="#22c55e"/>
+    <text x="626" y="253" font-size="12" fill="#4b5768">密码已设置</text>
+    <rect x="826" y="236" width="86" height="28" rx="7" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="869" y="255" text-anchor="middle" font-size="12" fill="#475569">测试连接</text>
+    <text x="946" y="255" font-size="12" fill="#475569">编辑</text>
+    <text x="992" y="255" font-size="12" fill="#dc2626">删除</text>
+    <line x1="292" y1="292" x2="1030" y2="292" stroke="#f0f3f8" stroke-width="1"/>
+    <!-- 行 2 -->
+    <circle cx="326" cy="332" r="16" fill="#f3f0ff"/>
+    <text x="326" y="337" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3aed">D</text>
+    <text x="356" y="328" font-size="14" font-weight="600" fill="#0f172a">db-1</text>
+    <text x="356" y="348" font-size="12" fill="#8592a5">root@10.0.0.6:2222</text>
+    <rect x="500" y="318" width="46" height="22" rx="11" fill="#f3f0ff"/>
+    <text x="523" y="333" text-anchor="middle" font-size="11.5" fill="#7c3aed">私钥</text>
+    <rect x="554" y="318" width="40" height="22" rx="11" fill="#f1f5f9"/>
+    <text x="574" y="333" text-anchor="middle" font-size="11.5" fill="#64748b">db</text>
+    <circle cx="616" cy="329" r="3" fill="#22c55e"/>
+    <text x="626" y="333" font-size="12" fill="#4b5768">私钥已设置</text>
+    <rect x="826" y="316" width="86" height="28" rx="7" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="869" y="335" text-anchor="middle" font-size="12" fill="#475569">测试连接</text>
+    <text x="946" y="335" font-size="12" fill="#475569">编辑</text>
+    <text x="992" y="335" font-size="12" fill="#dc2626">删除</text>
+    <line x1="292" y1="372" x2="1030" y2="372" stroke="#f0f3f8" stroke-width="1"/>
+
+    <!-- 指纹提示 -->
+    <rect x="308" y="392" width="706" height="76" rx="10" fill="#f8fafc" stroke="#eef2f7" stroke-width="1"/>
+    <text x="328" y="416" font-size="12.5" font-weight="600" fill="#475569">主机指纹</text>
+    <text x="328" y="438" font-size="12" fill="#8592a5" font-family="SF Mono, Menlo, Consolas, monospace">SHA256:9f3c…2ab7</text>
+    <text x="328" y="456" font-size="11.5" fill="#9aa6b6">首次连接自动记录；指纹变化时拒绝连接，确认新指纹后才放行</text>
+    <rect x="900" y="410" width="96" height="28" rx="7" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="948" y="429" text-anchor="middle" font-size="12" fill="#475569">查看已知主机</text>
+
+    <!-- 底部说明 -->
+    <text x="292" y="530" font-size="12" fill="#9aa6b6">密码只写入 DSH 凭据库（0600），页面只显示“已设置 / 未设置”，不回显明文。</text>
+    <text x="292" y="552" font-size="12" fill="#9aa6b6">sudo 密码单独保存；不填时回退使用登录密码。</text>
+  </g>
+</svg>

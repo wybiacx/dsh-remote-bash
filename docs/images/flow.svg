@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="rb-flow-title rb-flow-desc">
+  <title id="rb-flow-title">一次 remote_bash 调用的流程</title>
+  <desc id="rb-flow-desc">从 Agent 发起调用，经过目标解析、危险命令检测、审批、并行执行，到结果回到对话；首次连接记录指纹，变化时拒绝。</desc>
+  <defs>
+    <marker id="fl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="fl-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#d97706"/>
+    </marker>
+    <marker id="fl-arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="520" rx="18" fill="#f8fafc"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="518.5" rx="17.25" fill="none" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <g font-family="SF Pro Text, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+    <text x="48" y="60" font-size="22" font-weight="700" fill="#0f172a">一次 remote_bash 调用</text>
+    <text x="48" y="88" font-size="13" fill="#64748b">危险命令与指纹变化都有明确的拒绝路径，拒绝时命令不会执行</text>
+
+    <!-- 主干 5 个节点 -->
+    <rect x="48" y="128" width="170" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="72" cy="152" r="10" fill="#eff6ff"/>
+    <text x="72" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">1</text>
+    <text x="92" y="157" font-size="13.5" font-weight="600" fill="#0f172a">Agent 调用</text>
+    <text x="66" y="184" font-size="10.5" fill="#7c8798" font-family="SF Mono, Menlo, Consolas, monospace">targets / command</text>
+    <text x="66" y="202" font-size="10.5" fill="#7c8798" font-family="SF Mono, Menlo, Consolas, monospace">description</text>
+
+    <rect x="250" y="128" width="170" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="274" cy="152" r="10" fill="#eff6ff"/>
+    <text x="274" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">2</text>
+    <text x="294" y="157" font-size="13.5" font-weight="600" fill="#0f172a">解析目标</text>
+    <text x="268" y="184" font-size="10.5" fill="#7c8798">主机名 / @分组 / all</text>
+    <text x="268" y="202" font-size="10.5" fill="#7c8798">去重、校验是否存在</text>
+
+    <rect x="452" y="128" width="180" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="476" cy="152" r="10" fill="#eff6ff"/>
+    <text x="476" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">3</text>
+    <text x="496" y="157" font-size="13.5" font-weight="600" fill="#0f172a">风险检测</text>
+    <text x="470" y="184" font-size="10.5" fill="#7c8798">内置规则 + 自定义正则</text>
+    <text x="470" y="202" font-size="10.5" fill="#7c8798">sudo 参数 · 主机默认 sudo</text>
+
+    <rect x="664" y="128" width="190" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="688" cy="152" r="10" fill="#eff6ff"/>
+    <text x="688" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">4</text>
+    <text x="708" y="157" font-size="13.5" font-weight="600" fill="#0f172a">并行执行</text>
+    <text x="682" y="184" font-size="10.5" fill="#7c8798">ssh2 · 持久会话 · sudo</text>
+    <text x="682" y="202" font-size="10.5" fill="#7c8798">单机失败不影响其他主机</text>
+
+    <rect x="886" y="128" width="200" height="98" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.2"/>
+    <circle cx="910" cy="152" r="10" fill="#dcfce7"/>
+    <text x="910" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d">5</text>
+    <text x="930" y="157" font-size="13.5" font-weight="600" fill="#14532d">结果回对话</text>
+    <text x="904" y="184" font-size="10.5" fill="#4d7c5f">成功：只有输出</text>
+    <text x="904" y="202" font-size="10.5" fill="#4d7c5f">失败：一行原因 + 退出码</text>
+
+    <line x1="218" y1="177" x2="246" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow)"/>
+    <line x1="420" y1="177" x2="448" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow)"/>
+    <line x1="632" y1="177" x2="660" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow)"/>
+    <line x1="854" y1="177" x2="882" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow)"/>
+
+    <!-- 审批分支 -->
+    <line x1="542" y1="226" x2="542" y2="266" stroke="#d97706" stroke-width="1.5" marker-end="url(#fl-arrow-amber)"/>
+    <rect x="392" y="270" width="300" height="104" rx="10" fill="#fffbeb" stroke="#fcd34d" stroke-width="1.2"/>
+    <text x="410" y="296" font-size="13" font-weight="600" fill="#92400e">命中危险规则 → 等待审批</text>
+    <text x="410" y="318" font-size="11" fill="#a16207">允许一次 → 继续执行</text>
+    <text x="410" y="336" font-size="11" fill="#a16207">拒绝 / 取消 → 命令不执行</text>
+    <text x="410" y="354" font-size="11" fill="#a16207">审批服务不可用 → 直接拒绝</text>
+    <polyline points="692,300 744,300 744,228" fill="none" stroke="#d97706" stroke-width="1.5" marker-end="url(#fl-arrow-amber)"/>
+    <text x="752" y="296" font-size="10" fill="#b45309">允许后回到执行</text>
+
+    <!-- 指纹分支 -->
+    <line x1="800" y1="226" x2="800" y2="266" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#fl-arrow-blue)"/>
+    <rect x="728" y="270" width="360" height="104" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+    <text x="746" y="296" font-size="13" font-weight="600" fill="#1d4ed8">连接前先校验主机指纹</text>
+    <text x="746" y="318" font-size="11" fill="#3b6cb0">首次连接：自动记录 SHA256 指纹</text>
+    <text x="746" y="336" font-size="11" fill="#3b6cb0">指纹变化：拒绝连接，提示到设置页确认</text>
+    <text x="746" y="354" font-size="11" fill="#3b6cb0">确认后只影响这一台主机</text>
+
+    <!-- 失败收尾 -->
+    <rect x="48" y="424" width="520" height="56" rx="10" fill="#fef2f2" stroke="#fecaca" stroke-width="1.2"/>
+    <text x="66" y="448" font-size="12" font-weight="600" fill="#b91c1c">两条拒绝路径都以工具错误结束</text>
+    <text x="66" y="468" font-size="11" fill="#c05252">Agent 会收到 approval-denied / host-key-changed，并被告知不要把拒绝当成“可以绕过”</text>
+    <text x="48" y="500" font-size="11" fill="#94a3b8">密码只在 Host 进程内存里使用；审批弹窗显示的是命令目的与风险规则，完整命令留在审计记录中。</text>
+  </g>
+</svg>

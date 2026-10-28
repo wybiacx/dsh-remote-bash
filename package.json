@@ -1,0 +1,66 @@
+{
+  "name": "dsh-remote-bash",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Remote Bash：在单台或多台远程 Linux/macOS 主机上安全执行命令的 DSH 插件（密码/私钥认证、主机指纹 TOFU、危险命令审批、持久会话、SFTP）。",
+  "license": "MIT",
+  "author": "wybiacx",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "cordis-plugin",
+    "ssh",
+    "remote-shell"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wybiacx/dsh-remote-bash.git"
+  },
+  "homepage": "https://github.com/wybiacx/dsh-remote-bash",
+  "bugs": {
+    "url": "https://github.com/wybiacx/dsh-remote-bash/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "docs/**"
+  ],
+  "scripts": {
+    "test": "node --test tests/unit.test.mjs tests/ssh.test.mjs tests/service.test.mjs tests/tools.test.mjs tests/rpc.test.mjs",
+    "test:mock": "node tests/selftest-mock.mjs"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}
