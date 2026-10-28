@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="rb-settings-en-title rb-settings-en-desc">
+  <title id="rb-settings-en-title">Remote Bash settings page</title>
+  <desc id="rb-settings-en-desc">The Remote Bash page in DSH Settings: host list, credential state, connection test, known hosts and persistent sessions.</desc>
+  <defs>
+    <linearGradient id="st-bg-en" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef1f7"/>
+      <stop offset="1" stop-color="#e6eaf2"/>
+    </linearGradient>
+    <filter id="st-shadow-en" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#1e293b" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="1100" height="640" fill="url(#st-bg-en)"/>
+  <g font-family="SF Pro Text, Segoe UI, sans-serif">
+    <rect x="40" y="40" width="1020" height="560" rx="16" fill="#ffffff" stroke="#dde3ec" stroke-width="1" filter="url(#st-shadow-en)"/>
+    <rect x="40" y="40" width="1020" height="52" rx="16" fill="#fbfcfe"/>
+    <rect x="40" y="76" width="1020" height="16" fill="#fbfcfe"/>
+    <line x1="40" y1="92" x2="1060" y2="92" stroke="#e8edf4" stroke-width="1"/>
+    <circle cx="68" cy="66" r="5.5" fill="#f87171"/>
+    <circle cx="88" cy="66" r="5.5" fill="#fbbf24"/>
+    <circle cx="108" cy="66" r="5.5" fill="#34d399"/>
+    <text x="550" y="71" text-anchor="middle" font-size="13" fill="#64748b">DSH · Settings</text>
+
+    <rect x="41" y="93" width="220" height="506" fill="#fbfcfe"/>
+    <line x1="261" y1="93" x2="261" y2="599" stroke="#edf1f7" stroke-width="1"/>
+    <g font-size="13.5" fill="#475569">
+      <text x="72" y="140">Account</text>
+      <text x="72" y="182">General</text>
+      <text x="72" y="224">Models</text>
+      <text x="72" y="266">Plugins</text>
+      <text x="72" y="308">Agent presets</text>
+    </g>
+    <rect x="56" y="330" width="188" height="38" rx="9" fill="#e8f0fe"/>
+    <text x="72" y="355" font-size="13.5" font-weight="600" fill="#2563eb">Remote Bash</text>
+    <circle cx="76" cy="140" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="182" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="224" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="266" r="2" fill="#cbd5e1"/>
+    <circle cx="76" cy="308" r="2" fill="#cbd5e1"/>
+
+    <text x="292" y="140" font-size="24" font-weight="700" fill="#0f172a">Remote Bash</text>
+    <text x="292" y="166" font-size="12.5" fill="#7c8798">Manage hosts, credentials and host keys for remote commands</text>
+
+    <rect x="812" y="122" width="88" height="32" rx="8" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="856" y="143" text-anchor="middle" font-size="13" fill="#475569">Refresh</text>
+    <rect x="912" y="122" width="118" height="32" rx="8" fill="#2563eb"/>
+    <text x="971" y="143" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">+ Add host</text>
+
+    <line x1="292" y1="196" x2="1030" y2="196" stroke="#edf1f7" stroke-width="1"/>
+    <text x="292" y="188" font-size="13.5" font-weight="600" fill="#2563eb">Hosts</text>
+    <text x="336" y="188" font-size="12" fill="#94a3b8">2</text>
+    <rect x="288" y="195" width="44" height="2.5" rx="1.2" fill="#2563eb"/>
+    <text x="366" y="188" font-size="13.5" fill="#7c8798">Known hosts</text>
+    <text x="452" y="188" font-size="12" fill="#b6c0cd">1</text>
+    <text x="486" y="188" font-size="13.5" fill="#7c8798">Sessions</text>
+    <text x="550" y="188" font-size="12" fill="#b6c0cd">0</text>
+
+    <rect x="292" y="216" width="738" height="272" rx="12" fill="#ffffff" stroke="#e6ebf3" stroke-width="1"/>
+    <circle cx="326" cy="252" r="16" fill="#eef4ff"/>
+    <text x="326" y="257" text-anchor="middle" font-size="13" font-weight="700" fill="#2563eb">W</text>
+    <text x="356" y="248" font-size="14" font-weight="600" fill="#0f172a">web-1</text>
+    <text x="356" y="268" font-size="12" fill="#8592a5">deploy@10.0.0.5:22</text>
+    <rect x="494" y="238" width="62" height="22" rx="11" fill="#eef4ff"/>
+    <text x="525" y="253" text-anchor="middle" font-size="11.5" fill="#2563eb">Password</text>
+    <rect x="564" y="238" width="44" height="22" rx="11" fill="#f1f5f9"/>
+    <text x="586" y="253" text-anchor="middle" font-size="11.5" fill="#64748b">web</text>
+    <circle cx="624" cy="249" r="3" fill="#22c55e"/>
+    <text x="634" y="253" font-size="12" fill="#4b5768">Password set</text>
+    <rect x="786" y="236" width="112" height="28" rx="7" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="842" y="255" text-anchor="middle" font-size="12" fill="#475569">Test connection</text>
+    <text x="918" y="255" font-size="12" fill="#475569">Edit</text>
+    <text x="966" y="255" font-size="12" fill="#dc2626">Delete</text>
+    <line x1="292" y1="292" x2="1030" y2="292" stroke="#f0f3f8" stroke-width="1"/>
+
+    <circle cx="326" cy="332" r="16" fill="#f3f0ff"/>
+    <text x="326" y="337" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3aed">D</text>
+    <text x="356" y="328" font-size="14" font-weight="600" fill="#0f172a">db-1</text>
+    <text x="356" y="348" font-size="12" fill="#8592a5">root@10.0.0.6:2222</text>
+    <rect x="494" y="318" width="46" height="22" rx="11" fill="#f3f0ff"/>
+    <text x="517" y="333" text-anchor="middle" font-size="11.5" fill="#7c3aed">Key</text>
+    <rect x="548" y="318" width="40" height="22" rx="11" fill="#f1f5f9"/>
+    <text x="568" y="333" text-anchor="middle" font-size="11.5" fill="#64748b">db</text>
+    <circle cx="602" cy="329" r="3" fill="#22c55e"/>
+    <text x="612" y="333" font-size="12" fill="#4b5768">Key set</text>
+    <rect x="786" y="316" width="112" height="28" rx="7" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="842" y="335" text-anchor="middle" font-size="12" fill="#475569">Test connection</text>
+    <text x="918" y="335" font-size="12" fill="#475569">Edit</text>
+    <text x="966" y="335" font-size="12" fill="#dc2626">Delete</text>
+    <line x1="292" y1="372" x2="1030" y2="372" stroke="#f0f3f8" stroke-width="1"/>
+
+    <rect x="308" y="392" width="706" height="76" rx="10" fill="#f8fafc" stroke="#eef2f7" stroke-width="1"/>
+    <text x="328" y="416" font-size="12.5" font-weight="600" fill="#475569">Host key</text>
+    <text x="328" y="438" font-size="12" fill="#8592a5" font-family="SF Mono, Menlo, Consolas, monospace">SHA256:9f3c…2ab7</text>
+    <text x="328" y="456" font-size="11.5" fill="#9aa6b6">Recorded on first connect; a changed key is rejected until you confirm it</text>
+    <rect x="884" y="410" width="112" height="28" rx="7" fill="#ffffff" stroke="#dbe2ec" stroke-width="1"/>
+    <text x="940" y="429" text-anchor="middle" font-size="12" fill="#475569">View known hosts</text>
+
+    <text x="292" y="530" font-size="12" fill="#9aa6b6">Passwords go to the DSH credential store (0600); this page only shows set / not set.</text>
+    <text x="292" y="552" font-size="12" fill="#9aa6b6">The sudo password is stored separately; the login password is used as fallback.</text>
+  </g>
+</svg>

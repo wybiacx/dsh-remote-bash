@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="rb-banner-en-title rb-banner-en-desc">
+  <title id="rb-banner-en-title">Remote Bash</title>
+  <desc id="rb-banner-en-desc">An SSH command plugin for DeepSeek Harness: register hosts in Settings, run commands from the chat.</desc>
+  <defs>
+    <linearGradient id="rb-bg-en" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="0.55" stop-color="#101d33"/>
+      <stop offset="1" stop-color="#1b2b4a"/>
+    </linearGradient>
+    <radialGradient id="rb-glow-en" cx="0.18" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#2563eb" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#2563eb" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rb-term-en" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a1120"/>
+      <stop offset="1" stop-color="#0d1728"/>
+    </linearGradient>
+    <pattern id="rb-dots-en" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="1.2" cy="1.2" r="1.2" fill="#24344f"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="320" rx="20" fill="url(#rb-bg-en)"/>
+  <rect width="1200" height="320" rx="20" fill="url(#rb-glow-en)"/>
+  <rect x="0" y="0" width="640" height="320" rx="20" fill="url(#rb-dots-en)" opacity="0.55"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="318.5" rx="19.25" fill="none" stroke="#2b3d5c" stroke-width="1.5"/>
+
+  <g transform="translate(64 92)">
+    <rect width="88" height="88" rx="20" fill="#0f1a2e" stroke="#35507a" stroke-width="1.5"/>
+    <path d="M22 30 L44 44 L22 58" fill="none" stroke="#4ade80" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M48 60 H68" fill="none" stroke="#e2e8f0" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="66" cy="27" r="3.4" fill="#60a5fa"/>
+    <circle cx="75" cy="35" r="2.4" fill="#93c5fd"/>
+    <path d="M62 30 L69 34" stroke="#93c5fd" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+
+  <text x="186" y="136" font-family="SF Pro Display, Segoe UI, sans-serif" font-size="54" font-weight="700" fill="#f8fafc" letter-spacing="0.5">Remote Bash</text>
+  <text x="188" y="176" font-family="SF Pro Text, Segoe UI, sans-serif" font-size="17.5" fill="#9db0cc">One or many remote Linux / macOS hosts, from your DSH chat</text>
+
+  <g font-family="SF Pro Text, Segoe UI, sans-serif" font-size="13">
+    <rect x="188" y="206" width="140" height="32" rx="16" fill="#13233c" stroke="#2c4467" stroke-width="1"/>
+    <text x="258" y="227" text-anchor="middle" fill="#93b4e0">Local credentials</text>
+    <rect x="340" y="206" width="122" height="32" rx="16" fill="#13233c" stroke="#2c4467" stroke-width="1"/>
+    <text x="401" y="227" text-anchor="middle" fill="#93b4e0">TOFU host keys</text>
+    <rect x="474" y="206" width="150" height="32" rx="16" fill="#13233c" stroke="#2c4467" stroke-width="1"/>
+    <text x="549" y="227" text-anchor="middle" fill="#93b4e0">Command approval</text>
+  </g>
+
+  <g>
+    <rect x="748" y="58" width="396" height="204" rx="14" fill="url(#rb-term-en)" stroke="#2a3c5b" stroke-width="1.5"/>
+    <circle cx="772" cy="82" r="5" fill="#f87171"/>
+    <circle cx="790" cy="82" r="5" fill="#fbbf24"/>
+    <circle cx="808" cy="82" r="5" fill="#34d399"/>
+    <text x="862" y="86" font-family="SF Mono, Menlo, Consolas, monospace" font-size="12" fill="#64748b">remote_bash · @web</text>
+    <line x1="748" y1="102" x2="1144" y2="102" stroke="#1f2f47" stroke-width="1"/>
+    <g font-family="SF Mono, Menlo, Consolas, monospace" font-size="14">
+      <text x="772" y="134" fill="#4ade80">$</text>
+      <text x="790" y="134" fill="#cbd5e1">remote_bash @web "uptime"</text>
+      <text x="772" y="162" fill="#94a3b8">web-1</text>
+      <text x="846" y="162" fill="#64748b">up 12 days, 3 users</text>
+      <text x="772" y="186" fill="#94a3b8">web-2</text>
+      <text x="846" y="186" fill="#64748b">up 41 days, 1 user</text>
+      <text x="772" y="210" fill="#94a3b8">web-3</text>
+      <text x="846" y="210" fill="#64748b">up 2 days</text>
+      <text x="772" y="240" fill="#4ade80">▸ 3/3 hosts ok · 0.8s</text>
+    </g>
+  </g>
+</svg>

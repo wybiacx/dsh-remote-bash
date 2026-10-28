@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="540" viewBox="0 0 1200 540" role="img" aria-labelledby="rb-arch-en-title rb-arch-en-desc">
+  <title id="rb-arch-en-title">Remote Bash architecture</title>
+  <desc id="rb-arch-en-desc">The browser handles settings and display; the Host process owns credentials, fingerprints, approval and SSH; remote hosts only accept SSH.</desc>
+  <defs>
+    <marker id="ar-arrow-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="ar-arrow-blue-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="540" rx="18" fill="#f8fafc"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="538.5" rx="17.25" fill="none" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <g font-family="SF Pro Text, Segoe UI, sans-serif">
+    <text x="48" y="62" font-size="22" font-weight="700" fill="#0f172a">Where Remote Bash sits</text>
+    <text x="48" y="90" font-size="13" fill="#64748b">The browser handles input and display only; credentials, host keys, approval and SSH stay in the local Host process</text>
+
+    <rect x="48" y="130" width="250" height="170" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <rect x="70" y="150" width="34" height="24" rx="4" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+    <rect x="76" y="155" width="22" height="12" rx="1.5" fill="#ffffff" stroke="#93c5fd" stroke-width="1"/>
+    <text x="72" y="200" font-size="15" font-weight="600" fill="#0f172a">DSH Web UI</text>
+    <text x="72" y="222" font-size="12" fill="#64748b">Settings → Remote Bash</text>
+    <rect x="72" y="234" width="90" height="24" rx="12" fill="#f1f5f9"/>
+    <text x="117" y="250" text-anchor="middle" font-size="11" fill="#475569">Hosts</text>
+    <rect x="168" y="234" width="112" height="24" rx="12" fill="#f1f5f9"/>
+    <text x="224" y="250" text-anchor="middle" font-size="11" fill="#475569">Known hosts</text>
+    <text x="72" y="280" font-size="10.5" fill="#94a3b8">credentials go to Host, never echoed</text>
+
+    <line x1="298" y1="215" x2="376" y2="215" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ar-arrow-en)"/>
+    <text x="337" y="202" text-anchor="middle" font-size="11" font-weight="600" fill="#64748b">RPC</text>
+    <text x="337" y="236" text-anchor="middle" font-size="10" fill="#94a3b8">local HTTP</text>
+
+    <rect x="378" y="120" width="470" height="220" rx="12" fill="#ffffff" stroke="#dbe5f5" stroke-width="1.4"/>
+    <text x="400" y="150" font-size="15" font-weight="600" fill="#0f172a">DSH Host process · remote-bash</text>
+    <rect x="400" y="166" width="204" height="60" rx="8" fill="#f8fafc" stroke="#eef2f7" stroke-width="1"/>
+    <text x="414" y="188" font-size="12.5" font-weight="600" fill="#334155">Agent tools</text>
+    <text x="414" y="207" font-size="10.5" fill="#7c8798">remote_bash / upload / download</text>
+    <rect x="620" y="166" width="204" height="60" rx="8" fill="#f8fafc" stroke="#eef2f7" stroke-width="1"/>
+    <text x="634" y="188" font-size="12.5" font-weight="600" fill="#334155">SSH pool</text>
+    <text x="634" y="207" font-size="10.5" fill="#7c8798">password / key · TOFU check</text>
+    <rect x="400" y="238" width="204" height="60" rx="8" fill="#f8fafc" stroke="#eef2f7" stroke-width="1"/>
+    <text x="414" y="260" font-size="12.5" font-weight="600" fill="#334155">Danger detection</text>
+    <text x="414" y="279" font-size="10.5" fill="#7c8798">ctx.approval gate</text>
+    <rect x="620" y="238" width="204" height="60" rx="8" fill="#f8fafc" stroke="#eef2f7" stroke-width="1"/>
+    <text x="634" y="260" font-size="12.5" font-weight="600" fill="#334155">Persistent shell + SFTP</text>
+    <text x="634" y="279" font-size="10.5" fill="#7c8798">cd/export kept · dir transfer</text>
+    <text x="400" y="322" font-size="10.5" fill="#94a3b8" font-family="SF Mono, Menlo, Consolas, monospace">ssh2 (pure JS, no local ssh)</text>
+
+    <rect x="408" y="392" width="216" height="86" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <text x="424" y="416" font-size="12.5" font-weight="600" fill="#0f172a">DSH credential store</text>
+    <text x="424" y="436" font-size="9.5" fill="#7c8798" font-family="SF Mono, Menlo, Consolas, monospace">~/.dsh/.credentials.yaml</text>
+    <text x="424" y="456" font-size="10.5" fill="#94a3b8">passwords / passphrases / sudo</text>
+    <line x1="516" y1="392" x2="516" y2="344" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar-arrow-en)"/>
+    <rect x="676" y="392" width="216" height="86" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <text x="692" y="416" font-size="12.5" font-weight="600" fill="#0f172a">known_hosts.json</text>
+    <text x="692" y="436" font-size="9.5" fill="#7c8798" font-family="SF Mono, Menlo, Consolas, monospace">SHA256 fingerprints</text>
+    <text x="692" y="456" font-size="10.5" fill="#94a3b8">recorded on first connect · reject on change</text>
+    <line x1="784" y1="392" x2="784" y2="344" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar-arrow-en)"/>
+
+    <rect x="900" y="146" width="252" height="64" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <text x="918" y="172" font-size="13.5" font-weight="600" fill="#0f172a">web-1</text>
+    <text x="918" y="192" font-size="11" fill="#7c8798">deploy@10.0.0.5:22</text>
+    <text x="1122" y="192" text-anchor="end" font-size="10" fill="#94a3b8">sshd</text>
+    <rect x="900" y="238" width="252" height="64" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <text x="918" y="264" font-size="13.5" font-weight="600" fill="#0f172a">db-1</text>
+    <text x="918" y="284" font-size="11" fill="#7c8798">root@10.0.0.6:2222</text>
+    <text x="1122" y="284" text-anchor="end" font-size="10" fill="#94a3b8">sshd</text>
+    <rect x="900" y="330" width="252" height="64" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <text x="918" y="356" font-size="13.5" font-weight="600" fill="#0f172a">build-01</text>
+    <text x="918" y="376" font-size="11" fill="#7c8798">deploy@10.0.0.7:22</text>
+    <text x="1122" y="376" text-anchor="end" font-size="10" fill="#94a3b8">sshd</text>
+
+    <line x1="848" y1="236" x2="896" y2="236" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#ar-arrow-blue-en)"/>
+    <text x="872" y="224" text-anchor="middle" font-size="10.5" font-weight="600" fill="#3b82f6">ssh2 · parallel</text>
+
+    <text x="48" y="506" font-size="12" fill="#94a3b8">The model and browser only see credential state and command output; plaintext passwords stay in Host process memory.</text>
+  </g>
+</svg>

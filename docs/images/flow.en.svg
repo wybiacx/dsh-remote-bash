@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="rb-flow-en-title rb-flow-en-desc">
+  <title id="rb-flow-en-title">A remote_bash call</title>
+  <desc id="rb-flow-en-desc">From the agent call through target resolution, danger check, approval, parallel execution and back to the chat; first connections record a host key, changed keys are rejected.</desc>
+  <defs>
+    <marker id="fl-arrow-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="fl-arrow-amber-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#d97706"/>
+    </marker>
+    <marker id="fl-arrow-blue-en" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3b82f6"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="520" rx="18" fill="#f8fafc"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="518.5" rx="17.25" fill="none" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <g font-family="SF Pro Text, Segoe UI, sans-serif">
+    <text x="48" y="60" font-size="22" font-weight="700" fill="#0f172a">A remote_bash call</text>
+    <text x="48" y="88" font-size="13" fill="#64748b">Dangerous commands and changed host keys both have an explicit rejection path; rejected commands never run</text>
+
+    <rect x="48" y="128" width="170" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="72" cy="152" r="10" fill="#eff6ff"/>
+    <text x="72" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">1</text>
+    <text x="92" y="157" font-size="13.5" font-weight="600" fill="#0f172a">Agent call</text>
+    <text x="66" y="184" font-size="10" fill="#7c8798" font-family="SF Mono, Menlo, Consolas, monospace">targets / command</text>
+    <text x="66" y="202" font-size="10" fill="#7c8798" font-family="SF Mono, Menlo, Consolas, monospace">description</text>
+
+    <rect x="250" y="128" width="170" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="274" cy="152" r="10" fill="#eff6ff"/>
+    <text x="274" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">2</text>
+    <text x="294" y="157" font-size="13.5" font-weight="600" fill="#0f172a">Resolve targets</text>
+    <text x="268" y="184" font-size="10" fill="#7c8798">host name / @group / all</text>
+    <text x="268" y="202" font-size="10" fill="#7c8798">dedupe + validate</text>
+
+    <rect x="452" y="128" width="180" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="476" cy="152" r="10" fill="#eff6ff"/>
+    <text x="476" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">3</text>
+    <text x="496" y="157" font-size="13.5" font-weight="600" fill="#0f172a">Danger check</text>
+    <text x="470" y="184" font-size="10" fill="#7c8798">built-in + custom rules</text>
+    <text x="470" y="202" font-size="10" fill="#7c8798">sudo flag · host default</text>
+
+    <rect x="664" y="128" width="190" height="98" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <circle cx="688" cy="152" r="10" fill="#eff6ff"/>
+    <text x="688" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#2563eb">4</text>
+    <text x="708" y="157" font-size="13.5" font-weight="600" fill="#0f172a">Run in parallel</text>
+    <text x="682" y="184" font-size="10" fill="#7c8798">ssh2 · shell · sudo</text>
+    <text x="682" y="202" font-size="10" fill="#7c8798">failure isolated per host</text>
+
+    <rect x="886" y="128" width="200" height="98" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.2"/>
+    <circle cx="910" cy="152" r="10" fill="#dcfce7"/>
+    <text x="910" y="156" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d">5</text>
+    <text x="930" y="157" font-size="13.5" font-weight="600" fill="#14532d">Back to chat</text>
+    <text x="904" y="184" font-size="10" fill="#4d7c5f">success: output only</text>
+    <text x="904" y="202" font-size="10" fill="#4d7c5f">failure: reason + exit code</text>
+
+    <line x1="218" y1="177" x2="246" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow-en)"/>
+    <line x1="420" y1="177" x2="448" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow-en)"/>
+    <line x1="632" y1="177" x2="660" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow-en)"/>
+    <line x1="854" y1="177" x2="882" y2="177" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#fl-arrow-en)"/>
+
+    <line x1="542" y1="226" x2="542" y2="266" stroke="#d97706" stroke-width="1.5" marker-end="url(#fl-arrow-amber-en)"/>
+    <rect x="392" y="270" width="300" height="104" rx="10" fill="#fffbeb" stroke="#fcd34d" stroke-width="1.2"/>
+    <text x="410" y="296" font-size="12.5" font-weight="600" fill="#92400e">Danger rule matched → approval</text>
+    <text x="410" y="318" font-size="10.5" fill="#a16207">Allow once → continue</text>
+    <text x="410" y="336" font-size="10.5" fill="#a16207">Reject / cancel → not executed</text>
+    <text x="410" y="354" font-size="10.5" fill="#a16207">Approval unavailable → deny</text>
+    <polyline points="692,300 744,300 744,228" fill="none" stroke="#d97706" stroke-width="1.5" marker-end="url(#fl-arrow-amber-en)"/>
+    <text x="752" y="296" font-size="9.5" fill="#b45309">after approval</text>
+
+    <line x1="800" y1="226" x2="800" y2="266" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#fl-arrow-blue-en)"/>
+    <rect x="728" y="270" width="360" height="104" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.2"/>
+    <text x="746" y="296" font-size="12.5" font-weight="600" fill="#1d4ed8">Host key check before connect</text>
+    <text x="746" y="318" font-size="10.5" fill="#3b6cb0">First connect: record SHA256 fingerprint</text>
+    <text x="746" y="336" font-size="10.5" fill="#3b6cb0">Changed: reject, confirm in Settings</text>
+    <text x="746" y="354" font-size="10.5" fill="#3b6cb0">Confirming affects that host only</text>
+
+    <rect x="48" y="424" width="560" height="56" rx="10" fill="#fef2f2" stroke="#fecaca" stroke-width="1.2"/>
+    <text x="66" y="448" font-size="12" font-weight="600" fill="#b91c1c">Both rejection paths end as tool errors</text>
+    <text x="66" y="468" font-size="10.5" fill="#c05252">The agent gets approval-denied / host-key-changed and must not bypass a rejection</text>
+    <text x="48" y="500" font-size="11" fill="#94a3b8">Passwords live only in Host process memory; approvals show purpose and matched rules; the full command stays in the audit record.</text>
+  </g>
+</svg>
