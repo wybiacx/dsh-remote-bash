@@ -13,6 +13,7 @@ import path from 'node:path'
 import { after, test } from 'node:test'
 
 import ssh2 from 'ssh2'
+import { generateEd25519KeyPair } from './test-keys.mjs'
 
 import { createPaths, expandHome, resolveDataDir } from '../host/paths.js'
 import { createInventory, normalizeHostInput } from '../host/inventory.js'
@@ -173,7 +174,7 @@ test('inventory: normalizeHostInput is a pure function with slug collision handl
 // --- known_hosts -----------------------------------------------------------
 
 function generatedHostKey() {
-  const pair = utils.generateKeyPairSync('ed25519')
+  const pair = generateEd25519KeyPair()
   const parsed = utils.parseKey(pair.public)
   return { pair, blob: parsed.getPublicSSH() }
 }

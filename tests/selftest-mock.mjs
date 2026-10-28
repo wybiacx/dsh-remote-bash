@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import ssh2 from 'ssh2'
+import { generateEd25519KeyPair } from './test-keys.mjs'
 
 import {
   createMockServer,
@@ -403,7 +404,7 @@ async function main() {
 
     await test('wrong password and unauthorized public key are rejected', async () => {
       await assert.rejects(connect(mock, { password: 'nope' }))
-      const stranger = ssh2.utils.generateKeyPairSync('ed25519')
+      const stranger = generateEd25519KeyPair()
       await assert.rejects(connect(mock, { password: undefined, privateKey: stranger.private }))
     })
 
